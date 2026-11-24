@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>How Xenon Android runs Isolated Web Apps</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.55; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #17202a; background: #f5f7fa; }
+    main { width: min(980px, calc(100% - 2rem)); margin: 2.5rem auto 5rem; }
+    h1, h2, h3 { line-height: 1.2; letter-spacing: -.025em; }
+    h1 { font-size: clamp(2.2rem, 5vw, 3.6rem); margin: .3rem 0 .8rem; }
+    h2 { margin-top: 2.4rem; padding-top: .4rem; border-top: 1px solid #d9e0e7; }
+    h3 { margin-bottom: .35rem; }
+    p, li { max-width: 75ch; }
+    a { color: #1755a8; }
+    code { padding: .12em .3em; border-radius: .25em; background: #e9eef4; overflow-wrap: anywhere; }
+    .eyebrow { color: #52677d; text-transform: uppercase; letter-spacing: .12em; font-size: .8rem; font-weight: 700; }
+    .lede { color: #33475b; font-size: 1.18rem; }
+    .notice { border-left: 5px solid #bd5b21; background: #fff5ed; padding: 1rem 1.25rem; border-radius: .35rem; }
+    .notice p { margin: .3rem 0; }
+    .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: .55rem; margin: 1.5rem 0; }
+    .flow div { background: #fff; border: 1px solid #d7e1eb; border-radius: .5rem; padding: .85rem; min-width: 0; }
+    .flow strong { display: block; color: #183654; font-size: .88rem; }
+    .flow span { display: block; color: #52677d; font-size: .8rem; margin-top: .35rem; overflow-wrap: anywhere; }
+    .scroll { overflow-x: auto; }
+    table { border-collapse: collapse; width: 100%; background: #fff; }
+    th, td { padding: .8rem; border: 1px solid #d7e1eb; text-align: left; vertical-align: top; }
+    th { background: #eaf0f7; }
+    td:first-child { white-space: nowrap; font-weight: 650; }
+    .muted { color: #52677d; }
+    footer { margin-top: 3rem; color: #52677d; font-size: .9rem; }
+    @media (max-width: 760px) { .flow { grid-template-columns: 1fr; } main { margin-top: 1.5rem; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Xenon Android · engineering write-up · 25 September 2026</div>
+    <h1>How we got IWAs running on Android</h1>
+    <p class="lede">This is a port of Chromium's Isolated Web App (IWA) runtime into an optional Helium-based Xenon Android build. A signed packaged IWA now installs and opens independently through an app-owned home-screen shim; Controlled Frame renders inside it. The work is still experimental.</p>
+  </header>
+
+  <aside class="notice" aria-label="Current status">
+    <strong>Current boundary: working lab flow, not a production browser feature.</strong>
+    <p>The ordinary <code>org.agent54.xenon</code> browser is unchanged. The experimental browser is a separate <code>org.agent54.xenon.iwa</code> package. Android IWA updates are explicitly blocked while window and update coordination is unfinished.</p>
+  </aside>
+
+  <h2>What runs when someone taps the icon</h2>
+  <div class="flow" aria-label="IWA launch flow">
+    <div><strong>Signed bundle</strong><span>A <code>.swbn</code> is installed into the experimental browser profile in the lab.</span></div>
+    <div><strong>App-owned shim</strong><span>A separate Android APK provides the Kitchen Sink home-screen icon.</span></div>
+    <div><strong>App-ID intent</strong><span>The shim passes only a fixed installed app ID, never a URL or bundle path.</span></div>
+    <div><strong>Browser verification</strong><span>Xenon waits for its registry, verifies the installed IWA, then launches a private activity.</span></div>
+    <div><strong>Isolated page</strong><span><code>WebappActivity</code> loads <code>isolated-app://</code> content and its Controlled Frame.</span></div>
+  </div>
+  <p>The browser-owned entry refuses incomplete first run, off-the-record profiles, disabled IWA support, unknown IDs, and mismatched scope or origin. A bounded registry wait and weak activity reference avoid an unbounded launch request. The home-screen shim is deliberately small: <a href="../launcher/kitchen-sink/src/org/agent54/xenon/iwa/kitchensink/LauncherActivity.java">its launcher source</a> contains the fixed Kitchen Sink app ID and an explicit browser component.</p>
+
+  <h2>What changed in the source</h2>
+  <p>The build pins Chromium <code>154.0.8037.57</code> and Helium revisions in <a href="../source.lock.json">source.lock.json</a>. <a href="../scripts/build.sh">build.sh</a> applies Helium's patches, Xenon's ordinary Android patches, then the optional <a href="../patches/iwa/series">IWA patch series</a> only when <code>--experimental-iwa</code> is requested. The optional build uses its own output directory, package ID, and debug-flag file.</p>
+  <div class="scroll">
+    <table>
+      <thead><tr><th>Patch area</th><th>Why it was needed</th><th>Boundary kept</th></tr></thead>
+      <tbody>
+        <tr><td>0001–0030</td><td>Expose IWA runtime, scheme, URL loader, service registration, storage partition, secure-context headers, navigation throttle, and manifest policy to desktop Android. Add Android implementations for web-app interfaces that previously assumed desktop OS integration or full extensions.</td><td>Unsupported file handlers, desktop shortcuts, app-service operations, install dialogs, and scheduler launch report failure. Extension-unaware storage garbage collection is disabled instead of risking deletion of live partitions.</td></tr>
+        <tr><td>0031–0033</td><td>Add the installed-app-ID launcher, private standalone activity handoff, separate home-screen shim, and dedicated experimental command-line file.</td><td>External callers supply no URL, name, scope, or bundle. The ordinary browser's shared flags and package are not replaced.</td></tr>
+        <tr><td>0034–0036</td><td>Compile and register Controlled Frame using Android's extensions-core layer; enable its API only for eligible IWAs; connect guest creation, partition selection, embedder resource loading, media handling, and teardown.</td><td>Ordinary pages and IWAs without the manifest capability are excluded. Script/CSS fetches require the IWA's outer scheme and origin and a frame-bound loader.</td></tr>
+        <tr><td>0037–0043</td><td>Add focused Android activity tests and tracking for live, pending, and recreating IWA activities; request closing matching windows; bridge one-shot all-windows-closed notifications to native code.</td><td>Closing an Android activity is asynchronous. These counts and notifications are not yet proof that an update can safely commit.</td></tr>
+        <tr><td>0044–0049</td><td>Prepare a per-app update admission lease and a testable prioritized-update callback coordinator. Patch 0049 makes the helper's destructor use its safe shutdown path.</td><td>The coordinator is not connected to the real update manager, the lease is not owned by an update command, and update application remains rejected.</td></tr>
+        <tr><td>0050</td><td>Run Chromium's existing portable IWA entitlement tests as a small Android-native suite.</td><td>Test coverage only; broader web-app and Controlled Frame test exclusions remain.</td></tr>
+        <tr><td>0051</td><td>Add frame-owned Direct Sockets as a separate optional capability, with IWA origin/policy checks and no Android worker binder.</td><td>Emulator TCP/UDP and lifecycle checks pass. On both Samsung and Pixel canaries, the experimental IWA exchanged TCP and UDP echoes with this Mac and Google's Controlled Frame guest lacked the socket APIs. Broader lifecycle checks remain.</td></tr>
+        <tr><td>0052–0053</td><td>Test an explicit Direct Sockets BLOCK for one IWA origin and register <code>isolated-app</code> as a content-settings pattern in the optional Android IWA build.</td><td>The focused native test failed before scheme registration and passes afterward. A reproducible disposable-emulator fixture denied a public TCP listener under BLOCK; an always-run production test target remains open. The ordinary Android build is unchanged.</td></tr>
+        <tr><td>0054</td><td>Reopen a registry-verified packaged IWA when a warm app-owned launch finds its activity outside the installed app scope.</td><td>The emulator, Samsung tablet, and Pixel shims recover from <code>about:blank</code>; an in-scope emulator relaunch preserves live state. All 25 focused activity tests pass.</td></tr>
+        <tr><td>0055</td><td>As a separate experimental Controlled Frame privacy patch, derive Helium noise tokens from a browser-validated owning IWA and full guest partition, while keeping an ordinary site's noise exception out of that guest.</td><td>Two focused Android-native tests and emulator canvas probes pass: separate guest partitions and two different signed IWA owners at the same website each had distinct, stable canvas outputs from an ordinary tab. Guest reload, same-partition recreation, and a clean browser-process restart preserved separation. Disposable tests showed a global noise-off preference disabled noise in all contexts, while a persisted ordinary-site BLOCK survived restart without disabling either guest. Offline-audio output had distinct stable mean offsets across contexts, with an exact-raw feature-disabled control. The reviewer found no demonstrated bypass, and its defensive owner-null finding was fixed. Tablet and Pixel canaries both launched the signed IWA and produced three distinct, repeatable same-site canvas outputs across an ordinary tab and two guest partitions. A single-IWA physical offline-audio probe on each device also found distinct, repeatable ordinary/guest mean offsets without using device audio input or output. Extension WebView and always-run browser policy tests remain; this is not privacy sign-off.</td></tr>
+        <tr><td>0056</td><td>Keep the Controlled Frame's guest-specific noise scope during a pre-attach navigation, using browser-owned WebView, IWA owner, and full partition checks.</td><td>A teardown race reproduced ordinary-tab canvas outputs inside a replacement guest because attachment was temporarily incomplete. Two instrumented 20-iteration emulator races and one uninstrumented 20-iteration race passed with the narrow fix, as did ordinary-tab/two-guest comparisons. The reviewer found no source-level blocker. The signed APK was upgraded in place on tablet and Pixel; the tablet visibly rendered the guest, while the Pixel was locked and only its activity handoff was verified. Always-run browser integration tests remain.</td></tr>
+        <tr><td>0057</td><td>Register an IWA update completion callback before starting a queued task, so a synchronous completion cannot be missed.</td><td>The real-browser emulator probe failed with the old ordering and passed with 0057. Both ABI builds passed. This does not connect the separate coordinator, authorize updates, or cover shutdown/reentrancy.</td></tr>
+        <tr><td>0058</td><td>Detach a completed app's callback batch before notifying observers and callers, so a nested completion cannot invalidate the manager's callback-map iterator.</td><td>The disposable two-IWA emulator probe crashed before 0058 and rendered Kitchen Sink afterward. Shutdown, owner deletion, and real update application are still unproven; the update guard remains.</td></tr>
+        <tr><td>0059</td><td>Invalidate update-manager weak callbacks when shutdown begins, stopping a detached caller batch after an observer shuts down the manager.</td><td>A real-observer emulator regression failed before 0059 and passed afterward. Shutdown inside the first of multiple caller callbacks is still untested; this is not general update-lifecycle sign-off.</td></tr>
+        <tr><td>0060</td><td>Dispatch detached update callbacks one at a time, checking manager lifetime between them.</td><td>Real-manager emulator tests failed on 0059 and passed on 0060 when callback A shut down the manager directly or through destruction of its captured state. Broader shutdown and update admission remain unproven.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p class="muted">A checked-in, disposable emulator fixture now repeats the real browser policy check: a saved ordinary Google “noise off” exception survived a cold restart, while the same-origin IWA Controlled Frame stayed noisy. After reset, the ordinary page was noisy again and the exception map was empty. A separate clean-APK check navigated the IWA owner away, observed its guest disappear, and confirmed the app-owned shim recreated a guest with the same within-process partition identity. These are bounded manual browser checks, not the missing always-run release tests.</p>
+
+  <h2>Controlled Frame: more than making an element appear</h2>
+  <p>The first Xenon build rendered <code>&lt;controlledframe&gt;</code> as an unknown element. The fix required browser, common, and renderer registration plus its Android API feature gate. That alone would have been unsafe: <a href="decisions/0003-android-controlled-frame-boundaries.md">the boundary decision</a> also requires an installed IWA with the Controlled Frame manifest capability, a guest partition owned by that IWA, same-origin packaged resource fetching, the existing media-consent handler, and guest cleanup.</p>
+  <p>On the Android 16 emulator, an ordinary HTTPS page and a signed IWA without the permission had no Controlled Frame element. A relative packaged script loaded; HTTPS, another IWA origin, and same-origin <code>blob:</code> script URLs failed without crashing the browser. Google rendered inside Kitchen Sink on the emulator, Samsung tablet, Pixel, and the Pixel's external desktop display in earlier unlocked tests.</p>
+
+  <h2>What has actually been verified</h2>
+  <ul>
+    <li>The signed Kitchen Sink bundle installed in the experimental profile on the Android 16 emulator, Samsung SM-X710, and Pixel 10 Pro XL. The home-screen shim opened its <code>WebappActivity</code> on all three.</li>
+    <li>Kitchen Sink reported a secure, cross-origin-isolated context with <code>SharedArrayBuffer</code> on the emulator. The simpler signed Hello Xe IWA, without the policy, did not report cross-origin isolation.</li>
+    <li>Wrong-action and unknown-app-ID launch requests returned to the launcher without opening another IWA activity on the physical test devices.</li>
+    <li>Focused Java activity tests, native close/lease/coordinator tests, arm64 and x86-64 build checks, and repository tests have passed at their documented revisions. The latest coordinator suite has 11 emulator passes; it does not exercise the real update manager. Both portable IWA entitlement cases also pass on the emulator.</li>
+  </ul>
+  <p class="muted">The patch-0056 experimental APK is installed on both physical devices. Kitchen Sink and Google's Controlled Frame visibly rendered on the tablet; the Pixel reached the IWA activity but was locked for the latest visual check. Earlier unlocked canaries showed distinct same-site ordinary/guest canvas outputs and completed bounded TCP and UDP echoes. Patches 0057–0060 have been tested on the emulator only. The update coordinator remains unwired and updates remain blocked. For hashes and exact limitations, see <a href="iwa-port.md">the running port log</a>.</p>
+
+  <h2>What is still missing</h2>
+  <ol>
+    <li><strong>Distribution:</strong> a user-facing signed-bundle install/uninstall experience and a general per-IWA Android shim or shortcut flow. Today's Kitchen Sink shim is fixed to one app ID, and lab installation uses a one-time developer command-line switch.</li>
+    <li><strong>Safe updates:</strong> disposable real-browser tests reproduced a lost callback, a nested-completion crash, and callbacks running after shutdown. Patches 0057–0060 address those narrow cases, including shutdown during a two-callback batch and from callback A’s captured-state destructor. A further test is still red: shutdown retains a callback for another app instead of discarding its captured state. The probes are not yet always-run. The separate coordinator and lease are not connected to the manager and scheduler; owner deletion, post-shutdown entry, persisted-startup updates, busy-app deferral without losing the staged bundle, and IWA content outside standalone activities still need tests. The current guard must remain until end-to-end update tests pass.</li>
+    <li><strong>Direct Sockets:</strong> the separate experimental patch exposes frame-owned TCP/UDP in Kitchen Sink. Emulator loopback, worker-denial, permission-denial, active-socket teardown, consent-pending navigation, and a short background/resume TCP check passed. A focused native test fixed Android's missing <code>isolated-app</code> content-setting pattern; a reproducible disposable-emulator fixture verified explicit BLOCK denial through the public API. Changing BLOCK denies new sockets but does not close existing ones, so production policy must state that clearly. Samsung tablet and Pixel canaries exchanged TCP and UDP echoes with this Mac after granting the experimental IWA local-network access; their Controlled Frame guests lacked the APIs. An always-run production BLOCK test, broader races, and further lifecycle checks remain before support is complete. See <a href="decisions/0005-android-iwa-direct-sockets.md">the Direct Sockets boundary</a>.</li>
+    <li><strong>Screen capture:</strong> Kitchen Sink's current manifest does not request <code>display-capture</code>, so <code>getDisplayMedia</code> rejects at the policy gate. Its requested <code>all-screens-capture</code> policy is not enabled on Android and <code>getAllScreensMedia</code> is absent. Neither is a working capture test; an optional, separately reviewed capability would need consent and lifecycle checks. See <a href="decisions/0006-android-iwa-screen-capture.md">the screen-capture boundary</a>.</li>
+    <li><strong>Security coverage:</strong> restore an Android-safe subset of web-app and Controlled Frame tests currently excluded by broad desktop test gates. Verify real embedder media consent, persistent and cross-app partitions, disallowed guest schemes, context-menu cleanup, app-removal races, and ordinary-browser regressions. The original emulator probe found identical same-origin canvas fingerprints in an ordinary tab and two storage-isolated Controlled Frame guests. Experimental patch 0055 separates browser-validated guest tokens and site-exception policy. A later teardown race found a pre-attach navigation that fell back to the ordinary tab's text and font-free canvas outputs; patch 0056 addressed this in emulator checks and was upgraded on both physical devices, though the locked Pixel lacks a fresh visible privacy check. Always-run GuestView/navigation and policy regressions, owner-loss/changed-owner cases, extension WebView fallback, and applicable MPArch coverage remain. Do not allowlist <code>HELIUM_NOISE</code> yet. See <a href="decisions/0003-android-controlled-frame-boundaries.md">the Controlled Frame boundary</a>.</li>
+    <li><strong>Optional browser integration:</strong> general scheduler launch, link capture, file/protocol handling, and desktop-like OS integration are not part of this narrow independent-shim flow.</li>
+  </ol>
+  <p>The next release decision should distinguish <em>“a signed IWA launches and Controlled Frame renders”</em> from <em>“all IWA update and isolation paths are safe.”</em> The first has device evidence; the second remains work in progress. See <a href="decisions/0004-android-iwa-window-quiescence.md">the update-lifecycle design gate</a>.</p>
+
+  <footer>Source of truth: <a href="../patches/iwa/series">ordered patches</a>, <a href="iwa-port.md">test log</a>, and <a href="decisions/0001-android-iwa-launch-entry.md">launch decision</a>. This page contains no APKs, signing keys, or generated build artifacts.</footer>
+</main>
+</body>
+</html>

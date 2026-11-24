@@ -50,6 +50,8 @@
 0047-test-prioritized-update-callback-ordering.patch
 0048-detach-and-cancel-update-callbacks.patch
 0049-shut-down-update-callbacks-on-destruction.patch
+# Portable IWA entitlement test coverage.
+0050-run-portable-iwa-entitlement-tests-on-android.patch
 # Direct Sockets capability: frame-owned only, not a core IWA prerequisite.
 0051-enable-frame-direct-sockets-for-android-iwas.patch
 # Direct Sockets permission regression and Android-only IWA scheme registration.
