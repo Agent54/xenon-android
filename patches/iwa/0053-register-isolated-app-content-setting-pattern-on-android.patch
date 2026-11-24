@@ -1,0 +1,67 @@
+diff --git a/chrome/app/chrome_main_delegate.cc b/chrome/app/chrome_main_delegate.cc
+--- a/chrome/app/chrome_main_delegate.cc
++++ b/chrome/app/chrome_main_delegate.cc
+@@ -35,5 +35,8 @@
+ #include "base/timer/timer.h"
+ #include "build/build_config.h"
++#if BUILDFLAG(IS_ANDROID)
++#include "build/android_buildflags.h"
++#endif
+ #include "chrome/common/buildflags.h"
+ #include "chrome/common/channel_info.h"
+ #include "chrome/common/chrome_constants.h"
+@@ -94,5 +97,9 @@
+     BUILDFLAG(IS_MAC)
+ #include "components/webapps/isolated_web_apps/scheme.h"
++#elif BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++#include "components/webapps/isolated_web_apps/scheme.h"
++#endif
+ #endif
+ 
+ #if BUILDFLAG(IS_WIN)
+@@ -270,5 +277,9 @@ ChromeMainDelegate::GetNonWildcardDomainNonPortSchemes() {
+     BUILDFLAG(IS_MAC)
+       webapps::kIsolatedAppScheme,
++#elif BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++      webapps::kIsolatedAppScheme,
++#endif
+ #endif
+       content::kChromeDevToolsScheme,    content::kChromeUIScheme,
+       content::kChromeUIUntrustedScheme,
+diff --git a/chrome/BUILD.gn b/chrome/BUILD.gn
+--- a/chrome/BUILD.gn
++++ b/chrome/BUILD.gn
+@@ -1791,5 +1791,6 @@ if (is_android) {
+ 
+     deps = [
+       ":dependencies",
++      "//build:android_buildflags",
+       "//chrome/app:chrome_crash_reporter_client",
+       "//chrome/browser:chrome_content_browser_client",
+@@ -1815,5 +1816,9 @@ if (is_android) {
+       "//content/public/app",
+     ]
+ 
++    if (is_desktop_android) {
++      deps += [ "//components/webapps/isolated_web_apps:scheme" ]
++    }
++
+     # Explicit dependency required for JNI registration to be able to
+     # find the native side functions.
+diff --git a/chrome/app/BUILD.gn b/chrome/app/BUILD.gn
+--- a/chrome/app/BUILD.gn
++++ b/chrome/app/BUILD.gn
+@@ -180,7 +180,11 @@ static_library("test_support") {
+   if (is_mac || is_win || is_linux || is_chromeos) {
+     deps += [ "//components/webapps/isolated_web_apps:scheme" ]
+   }
+ 
+   if (is_android) {
++    deps += [ "//build:android_buildflags" ]
++    if (is_desktop_android) {
++      deps += [ "//components/webapps/isolated_web_apps:scheme" ]
++    }
+     deps += [
+       "//chrome/browser/android",

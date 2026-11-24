@@ -1,0 +1,46 @@
+diff --git a/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc b/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
+--- a/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
++++ b/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
+@@ -4,7 +4,9 @@
+ 
+ #include "chrome/browser/direct_sockets/chrome_direct_sockets_delegate.h"
+ 
++#include "base/command_line.h"
+ #include "base/containers/fixed_flat_set.h"
++#include "base/logging.h"
+ #include "build/android_buildflags.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+@@ -155,6 +157,32 @@
+ #else
+   const GURL& url = rfh.GetMainFrame()->GetLastCommittedURL();
+ #endif
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // Temporary disposable-emulator probe; never include in the patch series.
++  if (url.SchemeIs(webapps::kIsolatedAppScheme) &&
++      base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "xenon-test-revoke-iwa-direct-sockets")) {
++    auto* map =
++        HostContentSettingsMapFactory::GetForProfile(rfh.GetBrowserContext());
++    if (request.address == "127.0.0.2") {
++      map->SetContentSettingDefaultScope(
++          url, url, ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_DEFAULT);
++      LOG(ERROR) << "XENON_IWA_REVOKE_PROBE_RESET";
++      return false;
++    }
++    static int listener_requests = 0;
++    if (request.protocol == ProtocolType::kTcpServer &&
++        request.address == "127.0.0.1" && ++listener_requests == 2) {
++      map->SetContentSettingDefaultScope(
++          url, url, ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_BLOCK);
++      LOG(ERROR) << "XENON_IWA_REVOKE_PROBE_BLOCK="
++                 << (map->GetContentSetting(
++                         url, url, ContentSettingsType::DIRECT_SOCKETS) ==
++                     CONTENT_SETTING_BLOCK);
++      return false;
++    }
++  }
++#endif
+   if (!IsContentSettingAllowedForUrl(rfh.GetBrowserContext(), url,
+                                      ContentSettingsType::DIRECT_SOCKETS)) {
+     return false;

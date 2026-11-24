@@ -1,0 +1,41 @@
+diff --git a/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc b/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
+--- a/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
++++ b/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
+@@ -5,5 +5,7 @@
+ #include "chrome/browser/direct_sockets/chrome_direct_sockets_delegate.h"
+ 
++#include "base/command_line.h"
+ #include "base/containers/fixed_flat_set.h"
++#include "base/logging.h"
+ #include "build/android_buildflags.h"
+ #include "build/build_config.h"
+@@ -153,5 +155,29 @@ bool ChromeDirectSocketsDelegate::ValidateRequest(
+ #else
+   const GURL& url = rfh.GetMainFrame()->GetLastCommittedURL();
+ #endif
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // Temporary emulator-only diagnostic. Never include this in the patch series.
++  if (url.SchemeIs(webapps::kIsolatedAppScheme) &&
++      base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "xenon-test-block-iwa-direct-sockets")) {
++    auto* map =
++        HostContentSettingsMapFactory::GetForProfile(rfh.GetBrowserContext());
++    map->SetContentSettingDefaultScope(
++        url, url, ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_BLOCK);
++    const bool blocked =
++        map->GetContentSetting(url, url, ContentSettingsType::DIRECT_SOCKETS) ==
++        CONTENT_SETTING_BLOCK;
++    // Exercise the production content-setting gate while BLOCK is active.
++    const bool setting_allowed = IsContentSettingAllowedForUrl(
++        rfh.GetBrowserContext(), url, ContentSettingsType::DIRECT_SOCKETS);
++    map->SetContentSettingDefaultScope(
++        url, url, ContentSettingsType::DIRECT_SOCKETS, CONTENT_SETTING_DEFAULT);
++    LOG(ERROR) << "XENON_IWA_DIRECT_SOCKETS_BLOCK_PROBE="
++               << (blocked && !setting_allowed);
++    if (!setting_allowed) {
++      return false;
++    }
++  }
++#endif
+   if (!IsContentSettingAllowedForUrl(rfh.GetBrowserContext(), url,
+                                      ContentSettingsType::DIRECT_SOCKETS)) {

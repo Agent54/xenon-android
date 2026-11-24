@@ -1,0 +1,548 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index f2d204a..ef6e74f 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1401,6 +1401,7 @@ source_set("core") {
+ 
+   if (is_desktop_android) {
+     deps += [
++      "//chrome/browser/direct_sockets:impl",
+       "//chrome/browser/web_applications",
+       "//chrome/browser/web_applications/isolated_web_apps",
+       "//chrome/browser/web_applications:features",
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+index ab8f46b..6ef1719 100644
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -565,7 +565,6 @@
+ #include "chrome/browser/actor/actor_keyed_service_factory.h"
+ #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
+ #include "chrome/browser/digital_credentials/digital_identity_provider_desktop.h"
+-#include "chrome/browser/direct_sockets/chrome_direct_sockets_delegate.h"
+ #include "chrome/browser/glic/public/features.h"
+ #include "chrome/browser/indigo/onboarding/indigo_onboarding_dialog.h"
+ #include "chrome/browser/loader/features.h"
+@@ -614,6 +613,10 @@
+ #include "third_party/blink/public/mojom/installedapp/related_application.mojom.h"
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
++#include "chrome/browser/direct_sockets/chrome_direct_sockets_delegate.h"
++#endif
++
+ #if BUILDFLAG(IS_DESKTOP_ANDROID)
+ #include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
+ #include "components/webapps/isolated_web_apps/url_loading/url_loader_factory.h"
+@@ -7096,14 +7099,6 @@ void ChromeContentBrowserClient::CreateManagedConfigurationService(
+                                           std::move(receiver));
+ }
+ 
+-content::DirectSocketsDelegate*
+-ChromeContentBrowserClient::GetDirectSocketsDelegate() {
+-  if (!direct_sockets_delegate_) {
+-    direct_sockets_delegate_ = std::make_unique<ChromeDirectSocketsDelegate>();
+-  }
+-  return direct_sockets_delegate_.get();
+-}
+-
+ content::SensorDelegate* ChromeContentBrowserClient::GetSensorDelegate() {
+   if (!sensor_delegate_) {
+     sensor_delegate_ = std::make_unique<ChromeSensorDelegate>();
+@@ -7119,6 +7114,16 @@ ChromeContentBrowserClient::GetWebAuthenticationRequestDelegate(
+ }
+ #endif
+ 
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
++content::DirectSocketsDelegate*
++ChromeContentBrowserClient::GetDirectSocketsDelegate() {
++  if (!direct_sockets_delegate_) {
++    direct_sockets_delegate_ = std::make_unique<ChromeDirectSocketsDelegate>();
++  }
++  return direct_sockets_delegate_.get();
++}
++#endif
++
+ void ChromeContentBrowserClient::CreateSecurePaymentConfirmationService(
+     content::RenderFrameHost* render_frame_host,
+     mojo::PendingReceiver<payments::mojom::SecurePaymentConfirmationService>
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+index 5e99c03..9f523e5 100644
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -24,6 +24,7 @@
+ #include "base/time/time.h"
+ #include "base/timer/timer.h"
+ #include "base/values.h"
++#include "build/android_buildflags.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/startup_data.h"
+ #include "chrome/common/renderer_configuration.mojom.h"
+@@ -776,11 +777,13 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+       content::RenderFrameHost* render_frame_host,
+       mojo::PendingReceiver<blink::mojom::ManagedConfigurationService> receiver)
+       override;
+-  content::DirectSocketsDelegate* GetDirectSocketsDelegate() override;
+   content::SensorDelegate* GetSensorDelegate() override;
+   std::unique_ptr<content::AuthenticatorRequestClientDelegate>
+   GetWebAuthenticationRequestDelegate(
+       content::RenderFrameHost* render_frame_host) override;
++#endif
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
++  content::DirectSocketsDelegate* GetDirectSocketsDelegate() override;
+ #endif
+   void CreateSecurePaymentConfirmationService(
+       content::RenderFrameHost* render_frame_host,
+@@ -1374,8 +1377,10 @@ class ChromeContentBrowserClient : public content::ContentBrowserClient {
+       web_authentication_delegate_;
+   std::unique_ptr<ChromeHidDelegate> hid_delegate_;
+ #if !BUILDFLAG(IS_ANDROID)
+-  std::unique_ptr<ChromeDirectSocketsDelegate> direct_sockets_delegate_;
+   std::unique_ptr<ChromeSensorDelegate> sensor_delegate_;
++#endif
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
++  std::unique_ptr<ChromeDirectSocketsDelegate> direct_sockets_delegate_;
+ #endif
+   std::unique_ptr<ChromeBluetoothDelegate> bluetooth_delegate_;
+   std::unique_ptr<ChromeUsbDelegate> usb_delegate_;
+diff --git a/chrome/browser/direct_sockets/BUILD.gn b/chrome/browser/direct_sockets/BUILD.gn
+index f65a446..5be03fd 100644
+--- a/chrome/browser/direct_sockets/BUILD.gn
++++ b/chrome/browser/direct_sockets/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//extensions/buildflags/buildflags.gni")
+ 
+-assert(!is_android)
++assert(!is_android || is_desktop_android)
+ 
+ source_set("direct_sockets") {
+   sources = [ "chrome_direct_sockets_delegate.h" ]
+@@ -15,6 +15,7 @@ source_set("impl") {
+   sources = [ "chrome_direct_sockets_delegate.cc" ]
+   public_deps = [ ":direct_sockets" ]
+   deps = [
++    "//build:android_buildflags",
+     "//chrome/browser/content_settings:content_settings_factory",
+     "//components/content_settings/core/browser",
+     "//components/webapps/isolated_web_apps:scheme",
+@@ -29,36 +30,38 @@ source_set("impl") {
+   }
+ }
+ 
+-source_set("browser_tests") {
+-  testonly = true
+-  defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
+-  sources = [ "direct_sockets_apitest.cc" ]
+-  deps = [
+-    ":direct_sockets",
+-    "//base",
+-    "//base/test:test_support",
+-    "//chrome/browser/content_settings:content_settings_factory",
+-    "//chrome/browser/profiles:profile",
+-    "//chrome/browser/ui",
+-    "//chrome/browser/web_applications",
+-    "//chrome/browser/web_applications:web_applications_test_support",
+-    "//chrome/test:test_support",
+-    "//chrome/test:test_support_ui",
+-    "//components/content_settings/core/browser",
+-    "//content/public/browser",
+-    "//content/public/common",
+-    "//content/test:test_support",
+-    "//extensions/buildflags",
+-    "//net:test_support",
+-    "//services/network/public/mojom",
+-    "//testing/gmock",
+-    "//testing/gtest",
+-  ]
+-  if (enable_extensions) {
+-    deps += [
+-      "//extensions/browser",
+-      "//extensions/common",
+-      "//extensions/common/api",
++if (!is_android) {
++  source_set("browser_tests") {
++    testonly = true
++    defines = [ "HAS_OUT_OF_PROC_TEST_RUNNER" ]
++    sources = [ "direct_sockets_apitest.cc" ]
++    deps = [
++      ":direct_sockets",
++      "//base",
++      "//base/test:test_support",
++      "//chrome/browser/content_settings:content_settings_factory",
++      "//chrome/browser/profiles:profile",
++      "//chrome/browser/ui",
++      "//chrome/browser/web_applications",
++      "//chrome/browser/web_applications:web_applications_test_support",
++      "//chrome/test:test_support",
++      "//chrome/test:test_support_ui",
++      "//components/content_settings/core/browser",
++      "//content/public/browser",
++      "//content/public/common",
++      "//content/test:test_support",
++      "//extensions/buildflags",
++      "//net:test_support",
++      "//services/network/public/mojom",
++      "//testing/gmock",
++      "//testing/gtest",
+     ]
++    if (enable_extensions) {
++      deps += [
++        "//extensions/browser",
++        "//extensions/common",
++        "//extensions/common/api",
++      ]
++    }
+   }
+ }
+diff --git a/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc b/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
+index d55e64f..c494be5 100644
+--- a/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
++++ b/chrome/browser/direct_sockets/chrome_direct_sockets_delegate.cc
+@@ -5,6 +5,8 @@
+ #include "chrome/browser/direct_sockets/chrome_direct_sockets_delegate.h"
+ 
+ #include "base/containers/fixed_flat_set.h"
++#include "build/android_buildflags.h"
++#include "build/build_config.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "components/content_settings/core/browser/host_content_settings_map.h"
+ #include "components/webapps/isolated_web_apps/scheme.h"
+@@ -146,7 +148,19 @@ bool ChromeDirectSocketsDelegate::ValidateRequest(
+   }
+ #endif
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // Validate the requesting document's committed origin, not its IWA parent
++  // and not its URL. A Controlled Frame guest must never borrow the parent's
++  // socket grant, and an about:blank or blob:isolated-app://... document must
++  // not escape a per-origin BLOCK by being looked up under its own URL.
++  const url::Origin& origin = rfh.GetLastCommittedOrigin();
++  if (origin.scheme() != webapps::kIsolatedAppScheme) {
++    return false;
++  }
++  const GURL url = origin.GetURL();
++#else
+   const GURL& url = rfh.GetMainFrame()->GetLastCommittedURL();
++#endif
+   if (!IsContentSettingAllowedForUrl(rfh.GetBrowserContext(), url,
+                                      ContentSettingsType::DIRECT_SOCKETS)) {
+     return false;
+diff --git a/components/content_settings/core/browser/BUILD.gn b/components/content_settings/core/browser/BUILD.gn
+index ea4cda7..b6efea7 100644
+--- a/components/content_settings/core/browser/BUILD.gn
++++ b/components/content_settings/core/browser/BUILD.gn
+@@ -59,6 +59,7 @@ static_library("browser") {
+   ]
+ 
+   deps = [
++    "//build:android_buildflags",
+     "//build:blink_buildflags",
+     "//components/content_settings/core/common",
+     "//components/keyed_service/core",
+diff --git a/components/content_settings/core/browser/content_settings_registry.cc b/components/content_settings/core/browser/content_settings_registry.cc
+index 39980b6..0b4256f 100644
+--- a/components/content_settings/core/browser/content_settings_registry.cc
++++ b/components/content_settings/core/browser/content_settings_registry.cc
+@@ -9,6 +9,7 @@
+ 
+ #include "base/feature_list.h"
+ #include "base/values.h"
++#include "build/android_buildflags.h"
+ #include "build/blink_buildflags.h"
+ #include "build/build_config.h"
+ #include "components/content_settings/core/browser/content_settings_info.h"
+@@ -720,7 +721,12 @@ void ContentSettingsRegistry::Init() {
+            /*valid_settings=*/
+            {CONTENT_SETTING_ALLOW, CONTENT_SETTING_BLOCK},
+            WebsiteSettingsInfo::TOP_ORIGIN_ONLY_SCOPE,
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++           WebsiteSettingsRegistry::DESKTOP |
++               WebsiteSettingsRegistry::PLATFORM_ANDROID,
++#else
+            WebsiteSettingsRegistry::DESKTOP,
++#endif
+            ContentSettingsInfo::INHERIT_IN_INCOGNITO,
+            PermissionSettingsInfo::EXCEPTIONS_ON_SECURE_ORIGINS_ONLY);
+ 
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+index 25903e5..a5c9218 100644
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -3341,6 +3341,12 @@ source_set("browser") {
+       deps += [ "//gpu/vulkan/init" ]
+     }
+     libs += [ "jnigraphics" ]
++    if (is_desktop_android) {
++      sources += [
++        "direct_sockets/direct_sockets_service_impl.cc",
++        "direct_sockets/direct_sockets_service_impl.h",
++      ]
++    }
+   } else {
+     # Not Android.
+     sources += [
+diff --git a/content/browser/browser_interface_binders.cc b/content/browser/browser_interface_binders.cc
+index 0ac2be2..bb9263e 100644
+--- a/content/browser/browser_interface_binders.cc
++++ b/content/browser/browser_interface_binders.cc
+@@ -15,6 +15,7 @@
+ #include "base/no_destructor.h"
+ #include "base/supports_user_data.h"
+ #include "base/task/thread_pool.h"
++#include "build/android_buildflags.h"
+ #include "build/branding_buildflags.h"
+ #include "build/build_config.h"
+ #include "cc/base/switches.h"
+@@ -219,13 +220,16 @@
+ #include "third_party/blink/public/mojom/hid/hid.mojom.h"
+ #include "third_party/blink/public/mojom/unhandled_tap_notifier/unhandled_tap_notifier.mojom.h"
+ #else  // BUILDFLAG(IS_ANDROID)
+-#include "content/browser/direct_sockets/direct_sockets_service_impl.h"
+ #include "media/mojo/mojom/renderer_extensions.mojom.h"
+ #include "media/mojo/mojom/speech_recognition.mojom.h"  // nogncheck
+ #include "third_party/blink/public/mojom/hid/hid.mojom.h"
+ #include "third_party/blink/public/mojom/installedapp/installed_app_provider.mojom.h"
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
++#include "content/browser/direct_sockets/direct_sockets_service_impl.h"
++#endif
++
+ #if BUILDFLAG(IS_P2P_ENABLED)
+ #include "services/network/public/mojom/p2p.mojom.h"
+ #endif  // BUILDFLAG(IS_P2P_ENABLED)
+@@ -913,9 +917,11 @@ void PopulateBinderMapWithContext(
+ 
+   map->Add<blink::mojom::DeclarativePerformanceObserverHost>(
+       base::BindRepeating(&DeclarativePerformanceObserver::Bind));
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   map->Add<blink::mojom::DirectSocketsService>(
+       &DirectSocketsServiceImpl::CreateForFrame);
++#endif
++#if !BUILDFLAG(IS_ANDROID)
+   map->Add<media::mojom::SpeechRecognitionContext>(
+       &EmptyBinderForFrame<media::mojom::SpeechRecognitionContext>);
+   map->Add<media::mojom::SpeechRecognitionClientBrowserInterface>(
+diff --git a/content/browser/direct_sockets/direct_sockets_service_impl.cc b/content/browser/direct_sockets/direct_sockets_service_impl.cc
+index 75dae56..32331ea 100644
+--- a/content/browser/direct_sockets/direct_sockets_service_impl.cc
++++ b/content/browser/direct_sockets/direct_sockets_service_impl.cc
+@@ -11,6 +11,7 @@
+ #include "base/feature_list.h"
+ #include "base/functional/callback_helpers.h"
+ #include "base/memory/weak_ptr.h"
++#include "build/android_buildflags.h"
+ #include "build/build_config.h"
+ #include "content/browser/service_worker/service_worker_context_core.h"
+ #include "content/browser/service_worker/service_worker_context_wrapper.h"
+@@ -395,6 +396,14 @@ void DirectSocketsServiceImpl::CreateForFrame(
+     RenderFrameHost* render_frame_host,
+     mojo::PendingReceiver<blink::mojom::DirectSocketsService> receiver) {
+   DCHECK_CURRENTLY_ON(BrowserThread::UI);
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // A Controlled Frame guest may inherit an isolated parent process. Do not
++  // allow its non-IWA document to bind the IWA's socket service.
++  if (render_frame_host->GetLastCommittedOrigin().scheme() != "isolated-app") {
++    mojo::ReportBadMessage("Direct Sockets requires an IWA document.");
++    return;
++  }
++#endif
+   if (!base::FeatureList::IsEnabled(blink::features::kDirectSockets)) {
+     mojo::ReportBadMessage(
+         "features::kDirectSockets is disabled by command line parameters or a "
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+index 398a86c..38f51aa 100644
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -47,6 +47,7 @@
+ #include "base/trace_event/trace_event.h"
+ #include "base/types/optional_util.h"
+ #include "base/types/pass_key.h"
++#include "build/android_buildflags.h"
+ #include "build/build_config.h"
+ #include "build/buildflag.h"
+ #include "components/viz/host/host_frame_sink_manager.h"
+@@ -9783,7 +9784,16 @@ void NavigationRequest::ReadyToCommitNavigation(bool is_error) {
+ #endif
+   }
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // On Android, expose Direct Sockets only to isolated-app documents. The
++  // browser service repeats this origin check before binding a socket.
++  if (origin_to_commit && origin_to_commit->scheme() == "isolated-app" &&
++      IsIsolatedContext(GetRenderFrameHost()->GetProcess())) {
++    GetMutableRuntimeFeatureStateContext().SetDirectSocketsEnabled(
++        base::FeatureList::IsEnabled(blink::features::kDirectSockets));
++  }
++#else
+   if (IsIsolatedContext(GetRenderFrameHost()->GetProcess()) ||
+       (origin_to_commit &&
+        GetContentClient()->browser()->GetDirectSocketsDelegate() &&
+@@ -9795,6 +9805,7 @@ void NavigationRequest::ReadyToCommitNavigation(bool is_error) {
+     GetMutableRuntimeFeatureStateContext().SetDirectSocketsEnabled(
+         base::FeatureList::IsEnabled(blink::features::kDirectSockets));
+   }
++#endif  // BUILDFLAG(IS_DESKTOP_ANDROID)
+ #endif
+ 
+   // View-source URLs can't be prerendered or loaded in a fenced frame.
+diff --git a/content/public/browser/BUILD.gn b/content/public/browser/BUILD.gn
+index 86a0536..8e66a59 100644
+--- a/content/public/browser/BUILD.gn
++++ b/content/public/browser/BUILD.gn
+@@ -580,6 +580,7 @@ source_set("browser_sources") {
+ 
+   public_deps = [
+     "//base",
++    "//build:android_buildflags",
+     "//build:chromecast_buildflags",
+     "//components/download/public/common:public",
+     "//components/file_access",
+@@ -759,6 +760,10 @@ source_set("browser_sources") {
+     ]
+   }
+ 
++  if (is_desktop_android) {
++    sources += [ "direct_sockets_delegate.h" ]
++  }
++
+   if (enable_vr) {
+     sources += [
+       "browser_xr_runtime.h",
+diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
+index 304ddee..ec23e5a 100644
+--- a/content/public/browser/content_browser_client.cc
++++ b/content/public/browser/content_browser_client.cc
+@@ -844,7 +844,7 @@ TtsPlatform* ContentBrowserClient::GetTtsPlatform() {
+   return nullptr;
+ }
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+ DirectSocketsDelegate* ContentBrowserClient::GetDirectSocketsDelegate() {
+   return nullptr;
+ }
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
+index c2a69bc..a32d498 100644
+--- a/content/public/browser/content_browser_client.h
++++ b/content/public/browser/content_browser_client.h
+@@ -25,6 +25,7 @@
+ #include "base/time/time.h"
+ #include "base/types/strong_alias.h"
+ #include "base/values.h"
++#include "build/android_buildflags.h"
+ #include "build/build_config.h"
+ #include "build/buildflag.h"
+ #include "components/download/public/common/quarantine_connection.h"
+@@ -1304,7 +1305,7 @@ class CONTENT_EXPORT ContentBrowserClient {
+   // Allows the embedder to return a TTS platform implementation.
+   virtual TtsPlatform* GetTtsPlatform();
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   // Allows the embedder to return a DirectSocketsDelegate
+   // implementation.
+   virtual DirectSocketsDelegate* GetDirectSocketsDelegate();
+diff --git a/third_party/blink/public/mojom/BUILD.gn b/third_party/blink/public/mojom/BUILD.gn
+index 4d06542..2916adc 100644
+--- a/third_party/blink/public/mojom/BUILD.gn
++++ b/third_party/blink/public/mojom/BUILD.gn
+@@ -380,6 +380,10 @@ mojom("mojom_platform") {
+     "//url/mojom:url_mojom_scheme_host_port",
+   ]
+ 
++  if (!is_android || is_desktop_android) {
++    sources += [ "direct_sockets/direct_sockets.mojom" ]
++  }
++
+   if (is_android) {
+     # Direct deps (instead of transitive deps) are necessary for java targets.
+     public_deps += [
+@@ -401,10 +405,7 @@ mojom("mojom_platform") {
+       "//ui/latency/mojom",
+     ]
+   } else {
+-    sources += [
+-      "direct_sockets/direct_sockets.mojom",
+-      "printing/web_printing.mojom",
+-    ]
++    sources += [ "printing/web_printing.mojom" ]
+   }
+ 
+   if (is_mac) {
+diff --git a/third_party/blink/renderer/bindings/generated_in_modules.gni b/third_party/blink/renderer/bindings/generated_in_modules.gni
+index 1e3e846..5d8dae0 100644
+--- a/third_party/blink/renderer/bindings/generated_in_modules.gni
++++ b/third_party/blink/renderer/bindings/generated_in_modules.gni
+@@ -3531,7 +3531,7 @@ if (!is_ios) {
+ # generating the snapshot for android, blink is compiled with
+ # current_os="linux" and target_os="android". Using target_os is necessary as
+ # we need to compile in the same way as would happen when current_os="android".
+-if (!target_os_is_android) {
++if (!target_os_is_android || is_desktop_android) {
+   generated_dictionary_sources_in_modules += [
+     "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_multicast_group_options.cc",
+     "$root_gen_dir/third_party/blink/renderer/bindings/modules/v8/v8_multicast_group_options.h",
+diff --git a/third_party/blink/renderer/bindings/idl_in_modules.gni b/third_party/blink/renderer/bindings/idl_in_modules.gni
+index 70786b3..c75e642 100644
+--- a/third_party/blink/renderer/bindings/idl_in_modules.gni
++++ b/third_party/blink/renderer/bindings/idl_in_modules.gni
+@@ -1313,7 +1313,7 @@ static_idl_files_in_modules = [
+ # generating the snapshot for android, blink is compiled with
+ # current_os="linux" and target_os="android". Using target_os is necessary as
+ # we need to compile in the same way as would happen when current_os="android".
+-if (!target_os_is_android) {
++if (!target_os_is_android || is_desktop_android) {
+   static_idl_files_in_modules += [
+     "//third_party/blink/renderer/modules/direct_sockets/socket_connection.idl",
+     "//third_party/blink/renderer/modules/direct_sockets/socket_options.idl",
+diff --git a/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc b/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc
+index 8fb8f58..297866d 100644
+--- a/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc
++++ b/third_party/blink/renderer/core/workers/dedicated_worker_global_scope.cc
+@@ -38,6 +38,7 @@
+ #include "base/trace_event/trace_id_helper.h"
+ #include "base/trace_event/typed_macros.h"
+ #include "base/types/pass_key.h"
++#include "build/build_config.h"
+ #include "net/storage_access_api/status.h"
+ #include "third_party/blink/public/common/loader/worker_main_script_load_parameters.h"
+ #include "third_party/blink/public/mojom/fetch/fetch_api_request.mojom-blink.h"
+@@ -210,9 +211,15 @@ DedicatedWorkerGlobalScope::DedicatedWorkerGlobalScope(
+     is_isolated_context_ = false;
+   }
+ 
++  // Android's optional IWA tier supports frame-owned Direct Sockets only. Do
++  // not expose the API in workers without a worker browser-interface binder.
++#if BUILDFLAG(IS_ANDROID)
++  GetRuntimeFeatureStateOverrideContext()->SetDirectSocketsForceDisabled();
++#else
+   if (parsed_creation_params.direct_sockets_force_enabled_in_parent) {
+     GetRuntimeFeatureStateOverrideContext()->SetDirectSocketsForceEnabled();
+   }
++#endif
+ 
+   // Dedicated workers don't need to pause after script fetch.
+   ReadyToRunWorkerScript();
+diff --git a/third_party/blink/renderer/modules/BUILD.gn b/third_party/blink/renderer/modules/BUILD.gn
+index 5119717..cf1d590 100644
+--- a/third_party/blink/renderer/modules/BUILD.gn
++++ b/third_party/blink/renderer/modules/BUILD.gn
+@@ -176,11 +176,13 @@ component("modules") {
+   # current_os="linux" and target_os="android". Using target_os is necessary as
+   # we need to compile in the same way as would happen when
+   # current_os="android".
++  if (!target_os_is_android || is_desktop_android) {
++    sub_modules += [ "//third_party/blink/renderer/modules/direct_sockets" ]
++  }
+   if (target_os_is_android) {
+     sub_modules += [ "//third_party/blink/renderer/modules/remote_objects" ]
+   } else {
+     sub_modules += [
+-      "//third_party/blink/renderer/modules/direct_sockets",
+       "//third_party/blink/renderer/modules/printing",
+       "//third_party/blink/renderer/modules/smart_card",
+     ]

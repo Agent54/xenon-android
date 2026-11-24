@@ -1,0 +1,199 @@
+diff --git a/components/content_settings/core/browser/BUILD.gn b/components/content_settings/core/browser/BUILD.gn
+--- a/components/content_settings/core/browser/BUILD.gn
++++ b/components/content_settings/core/browser/BUILD.gn
+@@ -3,6 +3,8 @@
+ # found in the LICENSE file.
+ 
++import("//build/config/chrome_build.gni")
+ import("//build/config/features.gni")
+ import("//content/public/common/features.gni")
++import("//testing/test.gni")
+ 
+ static_library("browser") {
+@@ -180,3 +182,19 @@ source_set("test_support") {
+   public_deps = [ ":browser" ]
+   deps = [ "//testing/gmock" ]
+ }
++
++if (is_desktop_android) {
++  test("android_iwa_direct_sockets_content_settings_unittests") {
++    sources = [ "direct_sockets_content_settings_android_unittest.cc" ]
++    deps = [
++      ":browser",
++      "//base/test:run_all_unittests",
++      "//base/test:test_support",
++      "//components/content_settings/core/common",
++      "//components/sync_preferences:test_support",
++      "//testing/android/native_test:native_test_native_code",
++      "//testing/gtest",
++      "//url",
++    ]
++  }
++}
+diff --git a/components/content_settings/core/browser/direct_sockets_content_settings_android_unittest.cc b/components/content_settings/core/browser/direct_sockets_content_settings_android_unittest.cc
+new file mode 100644
+--- /dev/null
++++ b/components/content_settings/core/browser/direct_sockets_content_settings_android_unittest.cc
+@@ -0,0 +1,162 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "components/content_settings/core/browser/host_content_settings_map.h"
++
++#include <string>
++
++#include "base/memory/scoped_refptr.h"
++#include "base/test/task_environment.h"
++#include "components/content_settings/core/common/content_settings.h"
++#include "components/content_settings/core/common/content_settings_pattern.h"
++#include "components/content_settings/core/common/content_settings_types.h"
++#include "components/sync_preferences/testing_pref_service_syncable.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++#include "url/origin.h"
++#include "url/url_util.h"
++
++namespace {
++
++const char* const kIwaScheme[] = {"isolated-app"};
++
++constexpr char kFirstIwa[] =
++    "isolated-app://b7looprugym3zyxqffzqdz4mzc2vz4j6ge3arxg2ybbzwgb6ne2qaaic/";
++constexpr char kSecondIwa[] =
++    "isolated-app://ina4ctsaqtgp6fbrpecpvfsswtcndqyxbse4feq6jgzsqguxfeeqaaic/";
++
++class DirectSocketsContentSettingsAndroidTest : public testing::Test {
++ protected:
++  void SetUp() override {
++    ContentSettingsPattern::SetNonWildcardDomainNonPortSchemes(kIwaScheme);
++    HostContentSettingsMap::RegisterProfilePrefs(prefs_.registry());
++    map_ = base::MakeRefCounted<HostContentSettingsMap>(
++        &prefs_, /*is_off_the_record=*/false,
++        /*store_last_modified=*/false, /*restore_session=*/false,
++        /*should_record_metrics=*/false);
++  }
++
++  void TearDown() override {
++    map_->ShutdownOnUIThread();
++    map_.reset();
++  }
++
++  HostContentSettingsMap& map() { return *map_; }
++
++ private:
++  base::test::TaskEnvironment task_environment_;
++  sync_preferences::TestingPrefServiceSyncable prefs_;
++  scoped_refptr<HostContentSettingsMap> map_;
++};
++
++TEST_F(DirectSocketsContentSettingsAndroidTest,
++       ExplicitBlockAppliesOnlyToOneIwaOrigin) {
++  const GURL first(kFirstIwa);
++  const GURL second(kSecondIwa);
++  ASSERT_TRUE(first.is_valid());
++  ASSERT_TRUE(second.is_valid());
++  ASSERT_TRUE(ContentSettingsPattern::FromURLNoWildcard(first).IsValid());
++  ASSERT_TRUE(ContentSettingsPattern::FromURLNoWildcard(second).IsValid());
++
++  EXPECT_EQ(CONTENT_SETTING_ALLOW,
++            map().GetContentSetting(first, first,
++                                    ContentSettingsType::DIRECT_SOCKETS));
++  map().SetContentSettingDefaultScope(first, first,
++                                      ContentSettingsType::DIRECT_SOCKETS,
++                                      CONTENT_SETTING_BLOCK);
++  EXPECT_EQ(CONTENT_SETTING_BLOCK,
++            map().GetContentSetting(first, first,
++                                    ContentSettingsType::DIRECT_SOCKETS));
++  EXPECT_EQ(CONTENT_SETTING_ALLOW,
++            map().GetContentSetting(second, second,
++                                    ContentSettingsType::DIRECT_SOCKETS));
++}
++
++// Mirrors the Android IWA gate in ChromeDirectSocketsDelegate::ValidateRequest
++// (patch 0051): the DIRECT_SOCKETS setting is looked up by the requesting
++// document's committed origin, which must be an isolated-app origin. It is
++// never looked up by the document's own URL.
++bool IsAllowedForCommittedOrigin(HostContentSettingsMap& map,
++                                 const url::Origin& origin) {
++  if (origin.scheme() != kIwaScheme[0]) {
++    return false;
++  }
++  const GURL url = origin.GetURL();
++  return map.GetContentSetting(url, url, ContentSettingsType::DIRECT_SOCKETS) ==
++         CONTENT_SETTING_ALLOW;
++}
++
++// Registers isolated-app as a standard scheme so that url::Origin derives a
++// tuple origin for isolated-app:// and blob:isolated-app:// URLs, as the
++// browser does on desktop Android.
++class DirectSocketsCommittedOriginAndroidTest
++    : public DirectSocketsContentSettingsAndroidTest {
++ protected:
++  void SetUp() override {
++    if (!GURL(kFirstIwa).IsStandard()) {
++      url::AddStandardScheme(kIwaScheme[0], url::SCHEME_WITH_HOST);
++    }
++    DirectSocketsContentSettingsAndroidTest::SetUp();
++  }
++
++ private:
++  url::ScopedSchemeRegistryForTests scoped_registry_;
++};
++
++// Regression: an about:blank subframe of a BLOCKed IWA inherits the IWA's
++// origin. Looking it up under its own URL (about:blank) escaped the BLOCK.
++TEST_F(DirectSocketsCommittedOriginAndroidTest,
++       AboutBlankSubframeOfBlockedIwaIsBlocked) {
++  const GURL first(kFirstIwa);
++  const GURL about_blank("about:blank");
++  const url::Origin inherited_origin = url::Origin::Create(first);
++  ASSERT_EQ(kIwaScheme[0], inherited_origin.scheme());
++  ASSERT_TRUE(IsAllowedForCommittedOrigin(map(), inherited_origin));
++
++  map().SetContentSettingDefaultScope(first, first,
++                                      ContentSettingsType::DIRECT_SOCKETS,
++                                      CONTENT_SETTING_BLOCK);
++
++  // The pre-fix URL-based lookup did not see the IWA's BLOCK.
++  EXPECT_NE(CONTENT_SETTING_BLOCK,
++            map().GetContentSetting(about_blank, about_blank,
++                                    ContentSettingsType::DIRECT_SOCKETS));
++  // The origin-based gate does.
++  EXPECT_FALSE(IsAllowedForCommittedOrigin(map(), inherited_origin));
++  // A sandboxed (opaque-origin) about:blank is never eligible.
++  EXPECT_FALSE(IsAllowedForCommittedOrigin(map(), url::Origin()));
++  EXPECT_FALSE(IsAllowedForCommittedOrigin(
++      map(), inherited_origin.DeriveNewOpaqueOrigin()));
++}
++
++// Regression: a blob:isolated-app://<id>/<uuid> subframe resolves to the IWA's
++// origin and must honor that IWA's BLOCK without affecting other IWAs.
++TEST_F(DirectSocketsCommittedOriginAndroidTest,
++       BlobSubframeOfBlockedIwaIsBlocked) {
++  const GURL first(kFirstIwa);
++  const GURL second(kSecondIwa);
++  const GURL blob(std::string("blob:") + kFirstIwa +
++                  "0b2c5d0e-1f7a-4f11-9b8e-2b1a7f3c9d10");
++  ASSERT_TRUE(blob.is_valid());
++  ASSERT_TRUE(blob.SchemeIsBlob());
++  const url::Origin blob_origin = url::Origin::Create(blob);
++  ASSERT_EQ(url::Origin::Create(first), blob_origin);
++
++  map().SetContentSettingDefaultScope(first, first,
++                                      ContentSettingsType::DIRECT_SOCKETS,
++                                      CONTENT_SETTING_BLOCK);
++
++  EXPECT_FALSE(IsAllowedForCommittedOrigin(map(), blob_origin));
++  EXPECT_TRUE(
++      IsAllowedForCommittedOrigin(map(), url::Origin::Create(second)));
++}
++
++// A Controlled Frame guest or any other non-IWA document is rejected before
++// any content-setting lookup, even when the setting would allow it.
++TEST_F(DirectSocketsCommittedOriginAndroidTest, NonIwaOriginIsRejected) {
++  EXPECT_FALSE(IsAllowedForCommittedOrigin(
++      map(), url::Origin::Create(GURL("https://example.com/"))));
++}
++
++}  // namespace

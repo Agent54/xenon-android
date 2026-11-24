@@ -36,6 +36,11 @@
 0034-compile-controlled-frame-with-android-extension-core.patch
 0035-enable-controlled-frame-only-for-eligible-android-iwas.patch
 0036-preserve-controlled-frame-runtime-boundaries-on-android.patch
+# Direct Sockets capability: frame-owned only, not a core IWA prerequisite.
+0051-enable-frame-direct-sockets-for-android-iwas.patch
+# Direct Sockets permission regression and Android-only IWA scheme registration.
+0052-test-android-iwa-direct-sockets-content-setting.patch
+0053-register-isolated-app-content-setting-pattern-on-android.patch
 # Controlled Frame privacy: owner/partition-scoped Helium noise policy and tokens.
 0055-isolate-helium-noise-in-android-controlled-frames.patch
 # Controlled Frame privacy: retain scoped tokens during pre-attach navigation.
