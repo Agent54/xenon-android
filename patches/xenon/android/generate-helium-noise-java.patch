@@ -1,0 +1,10 @@
+--- a/third_party/blink/public/mojom/helium_noise/BUILD.gn
++++ b/third_party/blink/public/mojom/helium_noise/BUILD.gn
+@@ -7,4 +7,7 @@
+ mojom("helium_noise") {
+   sources = [ "noise_token.mojom" ]
++
++  # Blink's Android mojom aggregates require Java bindings for every dependency.
++  generate_java = is_android
+ 
+   public_deps = [ "//mojo/public/mojom/base" ]

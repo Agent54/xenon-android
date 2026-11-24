@@ -1,0 +1,6 @@
+{
+  "chromium_version": "154.0.8037.57",
+  "chromium_commit": "73c14f6228d7cd537c855007e8f88678969cc0eb",
+  "helium_commit": "3eb149f54bc5b7db3bf61b1db6303d5c773d04bd",
+  "helium_repository": "https://github.com/imputnet/helium.git"
+}

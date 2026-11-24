@@ -1,0 +1,12 @@
+--- a/chrome/browser/download/chrome_download_manager_delegate.cc
++++ b/chrome/browser/download/chrome_download_manager_delegate.cc
+@@ -1162,7 +1162,8 @@
+ 
+ bool ChromeDownloadManagerDelegate::ShouldObfuscateDownload(
+     download::DownloadItem* item) {
+-#if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
++#if (BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)) && \
++    BUILDFLAG(SAFE_BROWSING_DOWNLOAD_PROTECTION)
+   if (!base::FeatureList::IsEnabled(
+           enterprise_obfuscation::kEnterpriseFileObfuscation)) {
+     return false;

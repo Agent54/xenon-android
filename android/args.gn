@@ -1,0 +1,10 @@
+# Lab build: an ordinary Android browser first. Desktop-Android and IWA are
+# separate milestones, because both change Chromium's dependency graph.
+target_os = "android"
+target_cpu = "arm64"
+is_desktop_android = false
+is_debug = false
+is_component_build = false
+is_official_build = false
+symbol_level = 0
+chrome_public_manifest_package = "org.agent54.xenon"

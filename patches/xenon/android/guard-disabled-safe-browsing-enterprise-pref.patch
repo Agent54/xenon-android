@@ -1,0 +1,33 @@
+--- a/chrome/browser/interstitials/enterprise_util.cc
++++ b/chrome/browser/interstitials/enterprise_util.cc
+@@ -8,6 +8,8 @@
+ #include "components/enterprise/connectors/core/reporting_utils.h"
+ #include "components/prefs/pref_service.h"
++#include "components/safe_browsing/buildflags.h"
+ #include "components/safe_browsing/content/browser/safe_browsing_navigation_observer_manager.h"
+ #include "components/safe_browsing/core/common/features.h"
++#include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+ #include "components/sessions/content/session_tab_helper.h"
+ #include "content/public/browser/web_contents.h"
+@@ -117,8 +119,13 @@
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+ 
+ #if BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)
++  bool proceed_anyway_disabled = false;
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   content::BrowserContext* browser_context = web_contents->GetBrowserContext();
+   PrefService* prefs = Profile::FromBrowserContext(browser_context)->GetPrefs();
++  proceed_anyway_disabled =
++      prefs->GetBoolean(prefs::kSafeBrowsingProceedAnywayDisabled);
++#endif
+   enterprise_connectors::ReportingEventRouter* reporting_event_router =
+       GetReportingEventRouter(web_contents);
+ 
+@@ -135,6 +142,6 @@
+   reporting_event_router->OnSecurityInterstitialShown(
+       page_url, reason, net_error_code,
+-      prefs->GetBoolean(prefs::kSafeBrowsingProceedAnywayDisabled),
++      proceed_anyway_disabled,
+       referrer_chain);
+ 
+ #endif  // BUILDFLAG(ENTERPRISE_CONTENT_ANALYSIS) || BUILDFLAG(IS_ANDROID)

@@ -1,0 +1,10 @@
+--- a/chrome/browser/download/download_ui_safe_browsing_util.cc
++++ b/chrome/browser/download/download_ui_safe_browsing_util.cc
+@@ -5,6 +5,7 @@
+ #include "chrome/browser/download/download_ui_safe_browsing_util.h"
+ 
++#include "base/files/file_path.h"
+ #include "base/metrics/histogram_functions.h"
+ #include "base/strings/stringprintf.h"
+ #include "chrome/browser/profiles/profile.h"
+ #include "components/download/public/common/download_item.h"

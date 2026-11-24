@@ -1,0 +1,335 @@
+--- a/chrome/browser/prefs/browser_prefs.cc
++++ b/chrome/browser/prefs/browser_prefs.cc
+@@ -1884,7 +1884,9 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry,
+   PushMessagingUnsubscribedEntry::RegisterProfilePrefs(registry);
+   QuietNotificationPermissionUiState::RegisterProfilePrefs(registry);
+   regional_capabilities::prefs::RegisterProfilePrefs(registry);
++#if !BUILDFLAG(IS_ANDROID)
+   browser_shortcuts::prefs::RegisterProfilePrefs(registry);
++#endif
+   RegisterBrowserUserPrefs(registry);
+   registry->RegisterBooleanPref(prefs::kRestrictYouTubeCookiesDeletion, false);
+   RegisterGeminiSettingsPrefs(registry);
+--- a/chrome/browser/safe_browsing/android/safe_browsing_bridge.cc
++++ b/chrome/browser/safe_browsing/android/safe_browsing_bridge.cc
+@@ -18,6 +18,7 @@
+ #include "components/safe_browsing/content/browser/safe_browsing_service_interface.h"
+ #include "components/safe_browsing/content/common/file_type_policies.h"
+ #include "components/safe_browsing/core/common/hashprefix_realtime/hash_realtime_utils.h"
++#include "components/safe_browsing/buildflags.h"
+ #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
+ #include "content/public/browser/web_contents.h"
+ 
+@@ -26,9 +27,11 @@ using base::android::JavaRef;
+ 
+ namespace {
+ 
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+ PrefService* GetPrefService(const base::android::JavaRef<jobject>& j_profile) {
+   return Profile::FromJavaObject(j_profile)->GetPrefs();
+ }
++#endif
+ 
+ }  // namespace
+ 
+@@ -37,67 +40,97 @@ namespace safe_browsing {
+ static int32_t JNI_SafeBrowsingBridge_UmaValueForFile(
+     JNIEnv* env,
+     const JavaRef<jstring>& path) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   base::FilePath file_path(base::android::ConvertJavaStringToUTF8(env, path));
+   return safe_browsing::FileTypePolicies::GetInstance()->UmaValueForFile(
+       file_path);
++#else
++  return 0;
++#endif
+ }
+ 
+ static bool JNI_SafeBrowsingBridge_GetSafeBrowsingExtendedReportingEnabled(
+     JNIEnv* env,
+     const JavaRef<jobject>& j_profile) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   return safe_browsing::IsExtendedReportingEnabled(*GetPrefService(j_profile));
++#else
++  return false;
++#endif
+ }
+ 
+ static void JNI_SafeBrowsingBridge_SetSafeBrowsingExtendedReportingEnabled(
+     JNIEnv* env,
+     const JavaRef<jobject>& j_profile,
+     bool enabled) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   safe_browsing::SetExtendedReportingPrefAndMetric(
+       GetPrefService(j_profile), enabled,
+       safe_browsing::SBER_OPTIN_SITE_ANDROID_SETTINGS);
++#endif
+ }
+ 
+ static bool JNI_SafeBrowsingBridge_GetSafeBrowsingExtendedReportingManaged(
+     JNIEnv* env,
+     const JavaRef<jobject>& j_profile) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   PrefService* pref_service = GetPrefService(j_profile);
+   return pref_service->IsManagedPreference(
+       prefs::kSafeBrowsingScoutReportingEnabled);
++#else
++  return false;
++#endif
+ }
+ 
+ static int32_t JNI_SafeBrowsingBridge_GetSafeBrowsingState(
+     JNIEnv* env,
+     const JavaRef<jobject>& j_profile) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   return static_cast<int32_t>(
+       safe_browsing::GetSafeBrowsingState(*GetPrefService(j_profile)));
++#else
++  return static_cast<int32_t>(SafeBrowsingState::NO_SAFE_BROWSING);
++#endif
+ }
+ 
+ static void JNI_SafeBrowsingBridge_SetSafeBrowsingState(
+     JNIEnv* env,
+     const JavaRef<jobject>& j_profile,
+     int32_t state) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   return safe_browsing::SetSafeBrowsingState(
+       GetPrefService(j_profile), static_cast<SafeBrowsingState>(state),
+       /*is_esb_enabled_by_account_integration=*/false);
++#endif
+ }
+ 
+ static void JNI_SafeBrowsingBridge_EnableSafeBrowsingSettingSetLocallyPref(
+     JNIEnv* env,
+     const JavaRef<jobject>& j_profile) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   return safe_browsing::EnableSafeBrowsingSettingSetLocallyPref(
+       GetPrefService(j_profile));
++#endif
+ }
+ 
+ static bool JNI_SafeBrowsingBridge_IsSafeBrowsingManaged(
+     JNIEnv* env,
+     const JavaRef<jobject>& j_profile) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   return safe_browsing::IsSafeBrowsingPolicyManaged(*GetPrefService(j_profile));
++#else
++  return false;
++#endif
+ }
+ 
+ static bool JNI_SafeBrowsingBridge_IsHashRealTimeLookupEligibleInSession(
+     JNIEnv* env) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   return safe_browsing::hash_realtime_utils::
+       IsHashRealTimeLookupEligibleInSession();
++#else
++  return false;
++#endif
+ }
+ 
+ static void JNI_SafeBrowsingBridge_ReportIntent(
+@@ -104,9 +137,11 @@
+     content::WebContents* web_contents,
+     const std::string& package_name,
+     const std::string& uri) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   reinterpret_cast<SafeBrowsingServiceInterface*>(
+       g_browser_process->safe_browsing_service())
+       ->ReportExternalAppRedirect(web_contents, package_name, uri);
++#endif
+ }
+ 
+ }  // namespace safe_browsing
+--- a/chrome/browser/ui/android/safe_browsing/password_reuse_dialog_view_android.cc
++++ b/chrome/browser/ui/android/safe_browsing/password_reuse_dialog_view_android.cc
+@@ -11,6 +11,7 @@
+ #include "base/android/jni_string.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/safe_browsing/android/password_reuse_controller_android.h"
++#include "components/safe_browsing/buildflags.h"
+ #include "ui/android/window_android.h"
+ 
+ // Must come after all headers that specialize FromJniType() / ToJniType().
+@@ -41,15 +42,21 @@ void PasswordReuseDialogViewAndroid::Show(ui::WindowAndroid* window_android) {
+ }
+ 
+ void PasswordReuseDialogViewAndroid::CheckPasswords(JNIEnv* env) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   controller_->ShowCheckPasswords();
++#endif
+ }
+ 
+ void PasswordReuseDialogViewAndroid::Ignore(JNIEnv* env) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   controller_->IgnoreDialog();
++#endif
+ }
+ 
+ void PasswordReuseDialogViewAndroid::Close(JNIEnv* env) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   controller_->CloseDialog();
++#endif
+ }
+ 
+ }  // namespace safe_browsing
+--- a/chrome/browser/ui/android/safe_browsing/suspicious_site_dialog_view_android.cc
++++ b/chrome/browser/ui/android/safe_browsing/suspicious_site_dialog_view_android.cc
+@@ -11,6 +11,7 @@
+ #include "base/android/jni_string.h"
+ #include "base/strings/utf_string_conversions.h"
+ #include "chrome/browser/safe_browsing/android/suspicious_site_controller_android.h"
++#include "components/safe_browsing/buildflags.h"
+ #include "ui/android/window_android.h"
+ 
+ // Must come after all headers that specialize FromJniType() / ToJniType().
+@@ -39,22 +40,30 @@ void SuspiciousSiteDialogViewAndroid::Show(ui::WindowAndroid& window_android) {
+ }
+ 
+ void SuspiciousSiteDialogViewAndroid::ContinueAnyway(JNIEnv* env) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   controller_->OnContinueButtonClicked();
++#endif
+ }
+ 
+ void SuspiciousSiteDialogViewAndroid::GoBack(JNIEnv* env) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   controller_->HandleBackNavigation(
+       safe_browsing::SuspiciousSiteWarningUserInteraction::kBackToSafetyButton);
++#endif
+ }
+ 
+ void SuspiciousSiteDialogViewAndroid::OnLearnMoreClicked(JNIEnv* env) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   controller_->OnHelpCenterLinkClicked();
++#endif
+ }
+ 
+ void SuspiciousSiteDialogViewAndroid::Close(
+     JNIEnv* env,
+     ui::ModalDialogWrapper::DismissalCause dismissalCause) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   controller_->CloseDialog(dismissalCause);
++#endif
+ }
+ 
+ static void
+--- a/chrome/browser/interstitials/chrome_settings_page_helper.cc
++++ b/chrome/browser/interstitials/chrome_settings_page_helper.cc
+@@ -32,11 +32,11 @@ ChromeSettingsPageHelper::CreateChromeSettingsPageHelper() {
+ 
+ void ChromeSettingsPageHelper::OpenEnhancedProtectionSettings(
+     content::WebContents* web_contents) const {
+-#if BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   safe_browsing::ShowSafeBrowsingSettings(
+       web_contents->GetTopLevelNativeWindow(),
+       safe_browsing::SettingsAccessPoint::kSecurityInterstitial);
+-#else
++#elif !BUILDFLAG(IS_ANDROID)
+   // In rare circumstances, this happens outside of a Browser, better ignore
+   // than crash.
+   // TODO(crbug.com/40772284): Remove and find a better way, e.g. not showing
+@@ -70,8 +70,10 @@ void ChromeSettingsPageHelper::OpenEnhancedProtectionSettingsWithIph(
+ #if BUILDFLAG(IS_ANDROID)
+ void ChromeSettingsPageHelper::OpenAdvancedProtectionSettings(
+     content::WebContents& web_contents) {
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   safe_browsing::ShowAdvancedProtectionSettings(
+       web_contents.GetTopLevelNativeWindow());
++#endif
+ }
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
+--- a/chrome/browser/component_updater/registration.cc
++++ b/chrome/browser/component_updater/registration.cc
+@@ -196,7 +196,7 @@ void RegisterComponentsForUpdate() {
+   RegisterZxcvbnDataComponent(cus);
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
+-#if BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(IS_ANDROID) && BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   RegisterRealTimeUrlChecksAllowlistComponent(cus);
+ #endif  // BUIDLFLAG(IS_ANDROID)
+ 
+--- a/chrome/browser/password_manager/android/all_passwords_bottom_sheet_controller.cc
++++ b/chrome/browser/password_manager/android/all_passwords_bottom_sheet_controller.cc
+@@ -20,6 +20,7 @@
+ #include "components/password_manager/core/browser/password_manager_metrics_util.h"
+ #include "components/password_manager/core/browser/password_store/password_form_converters.h"
+ #include "components/password_manager/core/browser/password_store/password_store_interface.h"
++#include "components/safe_browsing/buildflags.h"
+ #include "content/public/browser/web_contents.h"
+ #include "ui/gfx/native_ui_types.h"
+ 
+@@ -73,8 +74,10 @@ AllPasswordsBottomSheetController::AllPasswordsBottomSheetController(
+           focused_frame);
+   driver_ = driver->AsWeakPtr();
+   client_ = ChromePasswordManagerClient::FromWebContents(web_contents_);
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   password_reuse_detection_manager_client_ =
+       ChromePasswordReuseDetectionManagerClient::FromWebContents(web_contents_);
++#endif
+ }
+ 
+ AllPasswordsBottomSheetController::~AllPasswordsBottomSheetController() {
+@@ -195,7 +198,9 @@ void AllPasswordsBottomSheetController::FillPassword(
+     return;
+   }
+   driver_->FillIntoFocusedField(true, password);
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   password_reuse_detection_manager_client_->OnPasswordSelected(password);
++#endif
+ }
+ 
+ void AllPasswordsBottomSheetController::OnResultFromAllStoresReceived(
+--- a/chrome/browser/notifications/notification_platform_bridge_android.cc
++++ b/chrome/browser/notifications/notification_platform_bridge_android.cc
+@@ -39,6 +39,7 @@
+ #include "components/pref_registry/pref_registry_syncable.h"
+ #include "components/safe_browsing/content/browser/notification_content_detection/notification_content_detection_constants.h"
+ #include "components/safe_browsing/core/common/features.h"
++#include "components/safe_browsing/buildflags.h"
+ #include "components/url_formatter/url_formatter.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/browser_thread.h"
+@@ -493,12 +494,14 @@ void NotificationPlatformBridgeAndroid::AlwaysAllowNotifications(
+       base::Value(
+           base::DictValue().Set(safe_browsing::kIsAllowlistedByUserKey, true)));
+ 
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   safe_browsing::NotificationContentDetectionUkmUtil::
+       RecordSuspiciousNotificationInteractionUkm(
+           static_cast<int>(
+               safe_browsing::SuspiciousNotificationWarningInteractions::
+                   kAlwaysAllow),
+           url, notification_id, profile);
++#endif
+ 
+   // Send a new notification to tell the user that Chrome will no longer hide
+   // notifications from `url`.
+--- a/chrome/browser/notifications/scheduler/tips_agent_android.cc
++++ b/chrome/browser/notifications/scheduler/tips_agent_android.cc
+@@ -19,6 +19,7 @@
+ #include "components/omnibox/browser/omnibox_prefs.h"
+ #include "components/prefs/pref_service.h"
+ #include "components/safe_browsing/core/common/safe_browsing_prefs.h"
++#include "components/safe_browsing/buildflags.h"
+ #include "components/segmentation_platform/public/constants.h"
+ #include "components/segmentation_platform/public/features.h"
+ #include "components/segmentation_platform/public/segmentation_platform_service.h"
+@@ -123,9 +124,13 @@ void TipsAgentAndroid::ScheduleNewNotification(
+ 
+   // V1 Tips: ESB, Quick Delete, Google Lens, Bottom Omnibox
+ 
++#if BUILDFLAG(SAFE_BROWSING_AVAILABLE)
+   bool is_enhanced_safe_browsing =
+       safe_browsing::GetSafeBrowsingState(*pref_service) ==
+       safe_browsing::SafeBrowsingState::ENHANCED_PROTECTION;
++#else
++  bool is_enhanced_safe_browsing = false;
++#endif
+   input_context->metadata_args.emplace(
+       segmentation_platform::kEnhancedSafeBrowsingStatus,
+       segmentation_platform::processing::ProcessedValue(

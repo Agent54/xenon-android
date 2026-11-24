@@ -1,0 +1,9 @@
+build/
+out/
+*.apk
+*.aab
+*.jks
+*.keystore
+local.properties
+__pycache__/
+.pytest_cache/

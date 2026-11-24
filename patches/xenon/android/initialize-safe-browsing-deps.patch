@@ -1,0 +1,13 @@
+--- a/chrome/browser/safe_browsing/BUILD.gn
++++ b/chrome/browser/safe_browsing/BUILD.gn
+@@ -8,4 +8,10 @@
+ 
+ static_library("safe_browsing") {
++  # Helium disables the base target body. Chromium still appends Android-only
++  # dependencies even when safe_browsing_mode is 0, so define those lists.
++  if (is_android) {
++    deps = []
++    allow_circular_includes_from = []
++  }
+   if (false) {
+   public = [

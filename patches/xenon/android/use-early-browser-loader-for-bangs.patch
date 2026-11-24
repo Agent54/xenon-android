@@ -1,0 +1,18 @@
+--- a/chrome/browser/search_engines/template_url_service_factory.cc
++++ b/chrome/browser/search_engines/template_url_service_factory.cc
+@@ -68,7 +68,15 @@ std::unique_ptr<KeyedService> TemplateURLServiceFactory::BuildInstanceFor(
+   Profile* profile = Profile::FromBrowserContext(context);
+   return std::make_unique<TemplateURLService>(
+       CHECK_DEREF(profile->GetPrefs()),
++#if BUILDFLAG(IS_ANDROID)
++      // Android's content-settings service can create this keyed service
++      // before the profile's storage partition finishes initialization.
++      // Bang requests omit credentials, so the browser-process factory is safe
++      // to use during this early startup phase.
++      g_browser_process->shared_url_loader_factory(),
++#else
+       context->GetDefaultStoragePartition()->GetURLLoaderFactoryForBrowserProcess(),
++#endif
+       CHECK_DEREF(
+           search_engines::SearchEngineChoiceServiceFactory::GetForProfile(
+               profile)),

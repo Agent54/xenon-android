@@ -1,0 +1,93 @@
+--- a/chrome/browser/android/locale/locale_template_url_loader.cc
++++ b/chrome/browser/android/locale/locale_template_url_loader.cc
+@@ -61,33 +61,9 @@ bool LocaleTemplateUrlLoader::LoadTemplateUrls() {
+   }
+ 
+   for (const auto& data_url : prepopulated_list) {
+-    // Attempt to see if the URL already exists in the list of template URLs.
+-    //
+-    // Special case Google because the keyword is mutated based on the results
+-    // of the GoogleUrlTracker, so we need to rely on prepopulate ID instead
+-    // of keyword only for Google.
+-    //
+-    // Otherwise, matching based on keyword is sufficient and preferred as
+-    // some logically distinct search engines share the same prepopulate ID and
+-    // only differ on keyword.
+-    const TemplateURL* matching_url =
+-        template_url_service_->GetTemplateURLForKeyword(data_url->keyword());
+-    bool exists = matching_url != nullptr;
+-    if (!exists &&
+-        data_url->prepopulate_id == TemplateURLPrepopulateData::google.id) {
+-      auto existing_urls = template_url_service_->GetTemplateURLs();
+-
+-      for (TemplateURL* existing_url : existing_urls) {
+-        if (existing_url->prepopulate_id() ==
+-            TemplateURLPrepopulateData::google.id) {
+-          matching_url = existing_url;
+-          exists = true;
+-          break;
+-        }
+-      }
+-    }
+-
+-    if (exists) {
++    // Helium does not prepopulate Google; match its remaining regional engines
++    // by keyword without the GoogleUrlTracker special case.
++    if (template_url_service_->GetTemplateURLForKeyword(data_url->keyword())) {
+       continue;
+     }
+ 
+@@ -120,49 +96,13 @@ void LocaleTemplateUrlLoader::RemoveTemplateUrls() {
+ }
+ 
+ void LocaleTemplateUrlLoader::OverrideDefaultSearchProvider() {
+-  if (!template_url_service_) {
+-    // TODO(b/318339172): Test profile state from Java, switch to CHECK here.
+-    base::debug::DumpWithoutCrashing();  // Investigating b/317335096.
+-    return;
+-  }
+-
+-  // If the user has changed their default search provider, no-op.
+-  const TemplateURL* current_dsp =
+-      template_url_service_->GetDefaultSearchProvider();
+-  if (!current_dsp ||
+-      current_dsp->prepopulate_id() != TemplateURLPrepopulateData::google.id) {
+-    return;
+-  }
+-
+-  TemplateURL* turl =
+-      FindURLByPrepopulateID(template_url_service_->GetTemplateURLs(),
+-                             GetDesignatedSearchEngineForChina());
+-  if (turl) {
+-    template_url_service_->SetUserSelectedDefaultSearchProvider(turl);
+-  }
++  // Chromium's regional override replaces Google with a local engine. Helium
++  // has no built-in Google engine, so no override is appropriate.
+ }
+ 
+ void LocaleTemplateUrlLoader::SetGoogleAsDefaultSearch() {
+-  if (!template_url_service_) {
+-    // TODO(b/318339172): Test profile state from Java, switch to CHECK here.
+-    base::debug::DumpWithoutCrashing();  // Investigating b/317335096.
+-    return;
+-  }
+-
+-  // If the user has changed their default search provider, no-op.
+-  const TemplateURL* current_dsp =
+-      template_url_service_->GetDefaultSearchProvider();
+-  if (!current_dsp ||
+-      current_dsp->prepopulate_id() != GetDesignatedSearchEngineForChina()) {
+-    return;
+-  }
+-
+-  TemplateURL* turl =
+-      FindURLByPrepopulateID(template_url_service_->GetTemplateURLs(),
+-                             TemplateURLPrepopulateData::google.id);
+-  if (turl) {
+-    template_url_service_->SetUserSelectedDefaultSearchProvider(turl);
+-  }
++  // Retained for the Java interface; there is no built-in Google engine to
++  // restore in Helium.
+ }
+ 
+ std::vector<std::unique_ptr<TemplateURLData>>

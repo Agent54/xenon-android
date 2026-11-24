@@ -1,0 +1,15 @@
+--- a/components/signin/internal/identity_manager/profile_oauth2_token_service_delegate_android.cc
++++ b/components/signin/internal/identity_manager/profile_oauth2_token_service_delegate_android.cc
+@@ -245,6 +245,12 @@ void ProfileOAuth2TokenServiceDelegateAndroid::
+     SeedAccountsThenReloadAllAccountsWithPrimaryAccount(
+         const std::vector<AccountInfo>& accounts,
+         const std::optional<CoreAccountId>& primary_account_id) {
++  // Helium does not load OAuth credentials. Android may still deliver device
++  // accounts during startup; do not import them into a disabled token service.
++  if (fire_refresh_token_loaded_ == RT_LOAD_NOT_START) {
++    return;
++  }
++
+   // `LoadCredentials` should be invoked before SigninManagerImpl is created.
+   // Otherwise, it might create a weird situation when a sign-out needs to be
+   // triggered before `LoadCredentials` is invoked. In reality, this invariant
