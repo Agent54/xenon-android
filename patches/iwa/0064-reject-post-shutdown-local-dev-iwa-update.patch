@@ -1,0 +1,16 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -627,6 +627,12 @@ void IsolatedWebAppUpdateManager::DiscoverApplyAndPrioritizeLocalDevModeUpdate(
+     const IsolatedWebAppUrlInfo& url_info,
+     base::OnceCallback<void(base::expected<IwaVersion, std::string>)>
+         callback) {
++  if (has_shutdown_) {
++    std::move(callback).Run(
++        base::unexpected("IWA update manager has shut down."));
++    return;
++  }
++
+   local_dev_mode_update_discoverer_->DiscoverLocalUpdate(
+       location, url_info,
+       base::BindOnce(&IsolatedWebAppUpdateManager::OnLocalUpdateDiscovered,

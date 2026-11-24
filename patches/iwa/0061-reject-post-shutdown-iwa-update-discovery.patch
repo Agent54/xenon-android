@@ -1,0 +1,32 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h
+@@ -373,6 +373,7 @@
+   raw_ptr<WebAppProvider> provider_ = nullptr;
+
+   bool has_started_ = false;
++  bool has_shutdown_ = false;
+
+   class NextUpdateDiscoveryCheck {
+    public:
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -459,6 +459,8 @@ void IsolatedWebAppUpdateManager::Shutdown() {
+ void IsolatedWebAppUpdateManager::Shutdown() {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+
++  has_shutdown_ = true;
++
+   // Completion observers can shut down the manager while a detached callback
+   // batch is being dispatched. Invalidate that dispatch before teardown.
+   weak_factory_.InvalidateWeakPtrs();
+@@ -596,4 +598,8 @@ size_t IsolatedWebAppUpdateManager::DiscoverAndPrepareUpdatesNow() {
+ size_t IsolatedWebAppUpdateManager::DiscoverAndPrepareUpdatesNow() {
++  if (has_shutdown_) {
++    return 0;
++  }
++
+   // If an update discovery check is already scheduled, reset it, so that the
+   // next update discovery happens based on `update_discovery_frequency_` time
+   // after `QueueUpdateDiscoverAndPrepareTasks` is called.

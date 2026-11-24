@@ -1,0 +1,534 @@
+diff --git a/chrome/browser/web_applications/BUILD.gn b/chrome/browser/web_applications/BUILD.gn
+index 26fa304..5ef9bb6 100644
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -631,7 +631,10 @@ source_set("web_applications") {
+   ]
+ 
+   if (is_desktop_android) {
+-    deps += [ "//chrome/android:chrome_jni_headers" ]
++    deps += [
++      ":android_iwa_close_waiter_bridge",
++      "//chrome/android:chrome_jni_headers",
++    ]
+   }
+ 
+   if (is_chrome_branded) {
+@@ -1652,3 +1655,27 @@ source_set("app_id_helpers") {
+     "//url",
+   ]
+ }
++
++if (is_desktop_android) {
++  source_set("android_iwa_close_waiter_bridge") {
++    sources = [
++      "android_iwa_close_waiter_bridge.cc",
++      "android_iwa_close_waiter_bridge.h",
++    ]
++    deps = [
++      "//base",
++      "//components/webapps/common",
++    ]
++  }
++
++  test("android_iwa_close_waiter_bridge_unittests") {
++    sources = [ "android_iwa_close_waiter_bridge_unittest.cc" ]
++    deps = [
++      ":android_iwa_close_waiter_bridge",
++      "//base/test:run_all_unittests",
++      "//base/test:test_support",
++      "//testing/android/native_test:native_test_native_code",
++      "//testing/gtest",
++    ]
++  }
++}
+diff --git a/chrome/browser/web_applications/android_iwa_close_waiter_bridge.cc b/chrome/browser/web_applications/android_iwa_close_waiter_bridge.cc
+new file mode 100644
+index 0000000..65a093f
+--- /dev/null
++++ b/chrome/browser/web_applications/android_iwa_close_waiter_bridge.cc
+@@ -0,0 +1,69 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/android_iwa_close_waiter_bridge.h"
++
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/uuid.h"
++
++namespace web_app {
++
++AndroidIwaCloseWaiterBridge::AndroidIwaCloseWaiterBridge(
++    RegisterCallback register_callback,
++    CancelCallback cancel_callback)
++    : register_callback_(std::move(register_callback)),
++      cancel_callback_(std::move(cancel_callback)) {}
++
++AndroidIwaCloseWaiterBridge::~AndroidIwaCloseWaiterBridge() {
++  Shutdown();
++}
++
++void AndroidIwaCloseWaiterBridge::Wait(const webapps::AppId& app_id,
++                                       base::OnceClosure callback) {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (shutdown_) {
++    return;
++  }
++  std::string waiter_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  while (pending_callbacks_.contains(waiter_id)) {
++    waiter_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
++  }
++  pending_callbacks_.emplace(waiter_id, std::move(callback));
++  auto completion = base::BindOnce(&AndroidIwaCloseWaiterBridge::OnCompleted,
++                                   weak_factory_.GetWeakPtr(), waiter_id);
++  RegisterCallback register_callback = register_callback_;
++  // Completion can destroy this bridge. This must remain the final operation.
++  register_callback.Run(app_id, waiter_id, std::move(completion));
++}
++
++void AndroidIwaCloseWaiterBridge::Shutdown() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (shutdown_) {
++    return;
++  }
++  shutdown_ = true;
++  weak_factory_.InvalidateWeakPtrs();
++  auto callbacks = std::move(pending_callbacks_);
++  pending_callbacks_.clear();
++  CancelCallback cancel_callback = cancel_callback_;
++  for (const auto& [waiter_id, callback] : callbacks) {
++    cancel_callback.Run(waiter_id);
++  }
++}
++
++void AndroidIwaCloseWaiterBridge::OnCompleted(
++    const std::string& waiter_id) {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  auto it = pending_callbacks_.find(waiter_id);
++  if (it == pending_callbacks_.end()) {
++    return;
++  }
++  base::OnceClosure callback = std::move(it->second);
++  pending_callbacks_.erase(it);
++  std::move(callback).Run();
++}
++
++}  // namespace web_app
+diff --git a/chrome/browser/web_applications/android_iwa_close_waiter_bridge.h b/chrome/browser/web_applications/android_iwa_close_waiter_bridge.h
+new file mode 100644
+index 0000000..33fda04
+--- /dev/null
++++ b/chrome/browser/web_applications/android_iwa_close_waiter_bridge.h
+@@ -0,0 +1,50 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_WEB_APPLICATIONS_ANDROID_IWA_CLOSE_WAITER_BRIDGE_H_
++#define CHROME_BROWSER_WEB_APPLICATIONS_ANDROID_IWA_CLOSE_WAITER_BRIDGE_H_
++
++#include <map>
++#include <string>
++
++#include "base/functional/callback.h"
++#include "base/memory/weak_ptr.h"
++#include "base/sequence_checker.h"
++#include "components/webapps/common/web_app_id.h"
++
++namespace web_app {
++
++// Owns native completion closures while Java tracks Android activity state.
++// The registration callback may invoke completion and destroy this object
++// synchronously, so Wait() must not touch members after calling it.
++class AndroidIwaCloseWaiterBridge {
++ public:
++  using RegisterCallback = base::RepeatingCallback<void(
++      const webapps::AppId&, const std::string&, base::OnceClosure)>;
++  using CancelCallback = base::RepeatingCallback<void(const std::string&)>;
++
++  AndroidIwaCloseWaiterBridge(RegisterCallback register_callback,
++                              CancelCallback cancel_callback);
++  AndroidIwaCloseWaiterBridge(const AndroidIwaCloseWaiterBridge&) = delete;
++  AndroidIwaCloseWaiterBridge& operator=(const AndroidIwaCloseWaiterBridge&) =
++      delete;
++  ~AndroidIwaCloseWaiterBridge();
++
++  void Wait(const webapps::AppId& app_id, base::OnceClosure callback);
++  void Shutdown();
++
++ private:
++  void OnCompleted(const std::string& waiter_id);
++
++  RegisterCallback register_callback_;
++  CancelCallback cancel_callback_;
++  bool shutdown_ = false;
++  std::map<std::string, base::OnceClosure> pending_callbacks_;
++  SEQUENCE_CHECKER(sequence_checker_);
++  base::WeakPtrFactory<AndroidIwaCloseWaiterBridge> weak_factory_{this};
++};
++
++}  // namespace web_app
++
++#endif  // CHROME_BROWSER_WEB_APPLICATIONS_ANDROID_IWA_CLOSE_WAITER_BRIDGE_H_
+diff --git a/chrome/browser/web_applications/android_iwa_close_waiter_bridge_unittest.cc b/chrome/browser/web_applications/android_iwa_close_waiter_bridge_unittest.cc
+new file mode 100644
+index 0000000..8b7870b
+--- /dev/null
++++ b/chrome/browser/web_applications/android_iwa_close_waiter_bridge_unittest.cc
+@@ -0,0 +1,233 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/android_iwa_close_waiter_bridge.h"
++
++#include <map>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace web_app {
++namespace {
++
++constexpr char kAppId[] = "idgjjoiemckfcohgjoaafbninphmambh";
++
++TEST(AndroidIwaCloseWaiterBridgeTest, SynchronousCompletionCanDestroyOwner) {
++  std::unique_ptr<AndroidIwaCloseWaiterBridge> bridge;
++  int completions = 0;
++  int cancellations = 0;
++  bridge = std::make_unique<AndroidIwaCloseWaiterBridge>(
++      base::BindRepeating(
++          [](const webapps::AppId& app_id, const std::string& waiter_id,
++             base::OnceClosure completion) {
++            EXPECT_EQ(kAppId, app_id);
++            EXPECT_FALSE(waiter_id.empty());
++            std::move(completion).Run();
++          }),
++      base::BindRepeating(
++          [](int* cancellations, const std::string& waiter_id) {
++            ++*cancellations;
++          },
++          &cancellations));
++  bridge->Wait(kAppId, base::BindOnce(
++                           [](std::unique_ptr<AndroidIwaCloseWaiterBridge>* owner,
++                              int* completions) {
++                             ++*completions;
++                             owner->reset();
++                           },
++                           &bridge, &completions));
++  EXPECT_EQ(1, completions);
++  EXPECT_EQ(nullptr, bridge);
++  EXPECT_EQ(0, cancellations);
++}
++
++TEST(AndroidIwaCloseWaiterBridgeTest, ShutdownCancelsAndIgnoresLateCompletion) {
++  std::map<std::string, base::OnceClosure> registered;
++  std::vector<std::string> canceled;
++  int completions = 0;
++  auto bridge = std::make_unique<AndroidIwaCloseWaiterBridge>(
++      base::BindRepeating(
++          [](std::map<std::string, base::OnceClosure>* registered,
++             const webapps::AppId& app_id, const std::string& waiter_id,
++             base::OnceClosure completion) {
++            registered->emplace(waiter_id, std::move(completion));
++          },
++          &registered),
++      base::BindRepeating(
++          [](std::vector<std::string>* canceled,
++             const std::string& waiter_id) { canceled->push_back(waiter_id); },
++          &canceled));
++  bridge->Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  ASSERT_EQ(1u, registered.size());
++  std::string waiter_id = registered.begin()->first;
++  bridge->Shutdown();
++  bridge->Shutdown();
++  EXPECT_EQ(std::vector<std::string>{waiter_id}, canceled);
++  std::move(registered.at(waiter_id)).Run();
++  EXPECT_EQ(0, completions);
++  bridge.reset();
++  EXPECT_EQ(1u, canceled.size());
++}
++
++TEST(AndroidIwaCloseWaiterBridgeTest, MultipleWaitersCompleteIndependently) {
++  std::map<std::string, base::OnceClosure> registered;
++  std::vector<std::string> canceled;
++  int first = 0;
++  int second = 0;
++  AndroidIwaCloseWaiterBridge bridge(
++      base::BindRepeating(
++          [](std::map<std::string, base::OnceClosure>* registered,
++             const webapps::AppId& app_id, const std::string& waiter_id,
++             base::OnceClosure completion) {
++            registered->emplace(waiter_id, std::move(completion));
++          },
++          &registered),
++      base::BindRepeating(
++          [](std::vector<std::string>* canceled,
++             const std::string& waiter_id) { canceled->push_back(waiter_id); },
++          &canceled));
++  bridge.Wait(kAppId,
++              base::BindOnce([](int* count) { ++*count; }, &first));
++  bridge.Wait(kAppId,
++              base::BindOnce([](int* count) { ++*count; }, &second));
++  ASSERT_EQ(2u, registered.size());
++  auto it = registered.begin();
++  std::move(it->second).Run();
++  EXPECT_EQ(1, first + second);
++  bridge.Shutdown();
++  ASSERT_EQ(1u, canceled.size());
++  EXPECT_NE(it->first, canceled.front());
++  EXPECT_EQ(1, first + second);
++}
++
++TEST(AndroidIwaCloseWaiterBridgeTest,
++     ReentrantCancellationCanDestroyOwnerWithPendingWaiters) {
++  std::map<std::string, base::OnceClosure> registered;
++  std::vector<std::string> canceled;
++  int completions = 0;
++  std::unique_ptr<AndroidIwaCloseWaiterBridge> bridge;
++  bridge = std::make_unique<AndroidIwaCloseWaiterBridge>(
++      base::BindRepeating(
++          [](std::map<std::string, base::OnceClosure>* registered,
++             const webapps::AppId& app_id, const std::string& waiter_id,
++             base::OnceClosure completion) {
++            registered->emplace(waiter_id, std::move(completion));
++          },
++          &registered),
++      base::BindRepeating(
++          [](std::unique_ptr<AndroidIwaCloseWaiterBridge>* owner,
++             std::vector<std::string>* canceled,
++             const std::string& waiter_id) {
++            canceled->push_back(waiter_id);
++            owner->reset();
++          },
++          &bridge, &canceled));
++  bridge->Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  bridge->Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  ASSERT_EQ(2u, registered.size());
++  bridge->Shutdown();
++  EXPECT_EQ(nullptr, bridge);
++  EXPECT_EQ(2u, canceled.size());
++  for (auto& [waiter_id, completion] : registered) {
++    std::move(completion).Run();
++  }
++  EXPECT_EQ(0, completions);
++}
++
++TEST(AndroidIwaCloseWaiterBridgeTest, WaitAfterShutdownDoesNotRegister) {
++  int registrations = 0;
++  int completions = 0;
++  AndroidIwaCloseWaiterBridge bridge(
++      base::BindRepeating(
++          [](int* registrations, const webapps::AppId& app_id,
++             const std::string& waiter_id, base::OnceClosure completion) {
++            ++*registrations;
++          },
++          &registrations),
++      base::BindRepeating([](const std::string& waiter_id) {}));
++  bridge.Shutdown();
++  bridge.Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  EXPECT_EQ(0, registrations);
++  EXPECT_EQ(0, completions);
++}
++
++TEST(AndroidIwaCloseWaiterBridgeTest,
++     DestructorCancelsEveryPendingWaiterAndInvalidatesCompletions) {
++  std::map<std::string, base::OnceClosure> registered;
++  std::vector<std::string> canceled;
++  int completions = 0;
++  auto bridge = std::make_unique<AndroidIwaCloseWaiterBridge>(
++      base::BindRepeating(
++          [](std::map<std::string, base::OnceClosure>* registered,
++             const webapps::AppId& app_id, const std::string& waiter_id,
++             base::OnceClosure completion) {
++            registered->emplace(waiter_id, std::move(completion));
++          },
++          &registered),
++      base::BindRepeating(
++          [](std::vector<std::string>* canceled,
++             const std::string& waiter_id) { canceled->push_back(waiter_id); },
++          &canceled));
++  bridge->Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  bridge->Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  ASSERT_EQ(2u, registered.size());
++  bridge.reset();
++  ASSERT_EQ(2u, canceled.size());
++  EXPECT_NE(canceled[0], canceled[1]);
++  for (auto& [waiter_id, completion] : registered) {
++    std::move(completion).Run();
++  }
++  EXPECT_EQ(0, completions);
++}
++
++TEST(AndroidIwaCloseWaiterBridgeTest,
++     ReentrantCancellationCannotRegisterAnotherWaiter) {
++  std::map<std::string, base::OnceClosure> registered;
++  std::vector<std::string> canceled;
++  int completions = 0;
++  AndroidIwaCloseWaiterBridge* bridge_ptr = nullptr;
++  AndroidIwaCloseWaiterBridge bridge(
++      base::BindRepeating(
++          [](std::map<std::string, base::OnceClosure>* registered,
++             const webapps::AppId& app_id, const std::string& waiter_id,
++             base::OnceClosure completion) {
++            registered->emplace(waiter_id, std::move(completion));
++          },
++          &registered),
++      base::BindRepeating(
++          [](AndroidIwaCloseWaiterBridge** owner,
++             std::vector<std::string>* canceled, int* completions,
++             const std::string& waiter_id) {
++            canceled->push_back(waiter_id);
++            (*owner)->Shutdown();
++            (*owner)->Wait(
++                kAppId,
++                base::BindOnce([](int* count) { ++*count; }, completions));
++          },
++          &bridge_ptr, &canceled, &completions));
++  bridge_ptr = &bridge;
++  bridge.Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  bridge.Wait(kAppId, base::BindOnce([](int* count) { ++*count; },
++                                      &completions));
++  ASSERT_EQ(2u, registered.size());
++  bridge.Shutdown();
++  EXPECT_EQ(2u, canceled.size());
++  EXPECT_EQ(2u, registered.size());
++  EXPECT_EQ(0, completions);
++}
++
++}  // namespace
++}  // namespace web_app
+diff --git a/chrome/browser/web_applications/web_app_ui_manager_android.cc b/chrome/browser/web_applications/web_app_ui_manager_android.cc
+index 18064b2..d42c6a0 100644
+--- a/chrome/browser/web_applications/web_app_ui_manager_android.cc
++++ b/chrome/browser/web_applications/web_app_ui_manager_android.cc
+@@ -4,7 +4,6 @@
+ 
+ #include "chrome/browser/web_applications/web_app_ui_manager.h"
+ 
+-#include <map>
+ #include <memory>
+ #include <optional>
+ #include <string>
+@@ -17,10 +16,8 @@
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/logging.h"
+-#include "base/memory/weak_ptr.h"
+-#include "base/sequence_checker.h"
+-#include "base/uuid.h"
+ #include "base/values.h"
++#include "chrome/browser/web_applications/android_iwa_close_waiter_bridge.h"
+ #include "components/webapps/browser/installable/ml_install_operation_tracker.h"
+ #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
+ 
+@@ -31,26 +28,30 @@ namespace web_app {
+ 
+ namespace {
+ 
+-// No Android app activity is wired up yet. Keep every unsupported UI operation
+-// an explicit failure rather than reporting a successful launch or install.
++void RegisterIwaCloseWaiter(const webapps::AppId& app_id,
++                            const std::string& waiter_id,
++                            base::OnceClosure completion) {
++  JNIEnv* env = base::android::AttachCurrentThread();
++  Java_WebappActivity_notifyOnAllIwaWindowsClosed(
++      env, app_id, waiter_id,
++      base::android::ToJniCallback(env, std::move(completion)));
++}
++
++void CancelIwaCloseWaiter(const std::string& waiter_id) {
++  Java_WebappActivity_cancelIwaWindowsClosedCallback(
++      base::android::AttachCurrentThread(), waiter_id);
++}
++
++// Keep unsupported Android UI operations an explicit failure rather than
++// reporting a successful launch or install.
+ class AndroidWebAppUiManager final : public WebAppUiManager {
+  public:
+-  ~AndroidWebAppUiManager() override { Shutdown(); }
++  AndroidWebAppUiManager()
++      : close_waiters_(base::BindRepeating(&RegisterIwaCloseWaiter),
++                       base::BindRepeating(&CancelIwaCloseWaiter)) {}
++  ~AndroidWebAppUiManager() override = default;
+   void Start() override {}
+-  void Shutdown() override {
+-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-    shutdown_ = true;
+-    weak_factory_.InvalidateWeakPtrs();
+-    if (pending_close_callbacks_.empty()) {
+-      return;
+-    }
+-    auto callbacks = std::move(pending_close_callbacks_);
+-    pending_close_callbacks_.clear();
+-    JNIEnv* env = base::android::AttachCurrentThread();
+-    for (const auto& [waiter_id, callback] : callbacks) {
+-      Java_WebappActivity_cancelIwaWindowsClosedCallback(env, waiter_id);
+-    }
+-  }
++  void Shutdown() override { close_waiters_.Shutdown(); }
+   WebAppUiManagerImpl* AsImpl() override { return nullptr; }
+ 
+   // The app-ID-only shim launches WebappActivity directly. Query Android's
+@@ -65,23 +66,7 @@ class AndroidWebAppUiManager final : public WebAppUiManager {
+   }
+   void NotifyOnAllAppWindowsClosed(const webapps::AppId& app_id,
+                                    base::OnceClosure callback) override {
+-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-    if (shutdown_) {
+-      return;
+-    }
+-    std::string waiter_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+-    while (pending_close_callbacks_.contains(waiter_id)) {
+-      waiter_id = base::Uuid::GenerateRandomV4().AsLowercaseString();
+-    }
+-    pending_close_callbacks_.emplace(waiter_id, std::move(callback));
+-    JNIEnv* env = base::android::AttachCurrentThread();
+-    auto java_callback = base::android::ToJniCallback(
+-        env, base::BindOnce(&AndroidWebAppUiManager::OnAllIwaWindowsClosed,
+-                            weak_factory_.GetWeakPtr(), waiter_id));
+-    // Java may complete synchronously and the closure may destroy this manager.
+-    // Do not access members after crossing this boundary.
+-    Java_WebappActivity_notifyOnAllIwaWindowsClosed(env, app_id, waiter_id,
+-                                                     java_callback);
++    close_waiters_.Wait(app_id, std::move(callback));
+   }
+ 
+   bool CanAddAppToQuickLaunchBar() const override { return false; }
+@@ -241,21 +226,7 @@ class AndroidWebAppUiManager final : public WebAppUiManager {
+       const std::string& app_id) override {}
+ 
+  private:
+-  void OnAllIwaWindowsClosed(const std::string& waiter_id) {
+-    DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+-    auto it = pending_close_callbacks_.find(waiter_id);
+-    if (it == pending_close_callbacks_.end()) {
+-      return;
+-    }
+-    base::OnceClosure callback = std::move(it->second);
+-    pending_close_callbacks_.erase(it);
+-    std::move(callback).Run();
+-  }
+-
+-  bool shutdown_ = false;
+-  std::map<std::string, base::OnceClosure> pending_close_callbacks_;
+-  SEQUENCE_CHECKER(sequence_checker_);
+-  base::WeakPtrFactory<AndroidWebAppUiManager> weak_factory_{this};
++  AndroidIwaCloseWaiterBridge close_waiters_;
+ };
+ 
+ }  // namespace

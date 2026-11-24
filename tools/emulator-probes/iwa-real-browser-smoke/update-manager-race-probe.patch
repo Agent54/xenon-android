@@ -1,0 +1,109 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -13,3 +13,4 @@
+ #include "base/cancelable_callback.h"
+ #include "base/check.h"
++#include "base/command_line.h"
+ #include "base/containers/circular_deque.h"
+@@ -19,3 +20,4 @@
+ #include "base/functional/bind.h"
+ #include "base/location.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ref.h"
+@@ -29,6 +31,7 @@
+ #include "base/types/expected_macros.h"
+ #include "base/types/optional_util.h"
+ #include "base/values.h"
++#include "build/android_buildflags.h"
+ #include "chrome/browser/profiles/keep_alive/profile_keep_alive_types.h"
+ #include "chrome/browser/profiles/keep_alive/scoped_profile_keep_alive.h"
+ #include "chrome/browser/profiles/profile.h"
+@@ -399,10 +402,26 @@ void IsolatedWebAppUpdateManager::Start() {
+     return;
+   }
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // Disposable emulator-only test: hold one installed IWA's fake apply task.
++  const std::string probe_host = base::CommandLine::ForCurrentProcess()
++                                     ->GetSwitchValueASCII(
++                                         "xenon-test-iwa-update-callback-race");
++#endif
+   for (const WebApp& web_app :
+        provider_->registrar_unsafe().GetApps(WebAppFilter::IsIsolatedApp())) {
+-    if (!web_app.isolation_data()->pending_update_info().has_value()) {
++    const bool has_pending =
++        web_app.isolation_data()->pending_update_info().has_value();
++    bool probe_match = false;
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++    probe_match = !probe_host.empty() && web_app.scope().host() == probe_host;
++    if (probe_match && has_pending) {
++      LOG(ERROR) << "XENON_IWA_MANAGER_PROBE_REFUSED_PENDING";
++      continue;
++    }
++#endif
++    if (!has_pending && !probe_match) {
+       continue;
+     }
+     auto url_info = IsolatedWebAppUrlInfo::Create(web_app.scope());
+     CHECK(url_info.has_value());
+@@ -425,6 +444,9 @@ void IsolatedWebAppUpdateManager::Start() {
+     // `IsolatedWebAppURLLoaderFactory` can only create `URLLoader`s for IWAs
+     // after the `WebAppProvider` has fully started, and this code runs as part
+     // of the startup process of the `WebAppProvider`.
++    if (probe_match) {
++      LOG(ERROR) << "XENON_IWA_MANAGER_PROBE_QUEUED";
++    }
+     task_queue_.Push(std::make_unique<IsolatedWebAppUpdateApplyTask>(
+         *url_info,
+         std::make_unique<ScopedKeepAlive>(
+@@ -440,3 +462,10 @@ void IsolatedWebAppUpdateManager::DelayedStart() {
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "xenon-test-iwa-update-callback-race")) {
++    LOG(ERROR) << "XENON_IWA_MANAGER_PROBE_HELD";
++    return;
++  }
++#endif
+   // Kick-off task processing. The task queue can already contain
+   // `IsolatedWebAppUpdateApplyTask`s for updates that are pending from the last
+   // browser session and were created in `IsolatedWebAppUpdateManager::Start`.
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc
+@@ -11,10 +11,13 @@
+ #include "base/check_deref.h"
++#include "base/command_line.h"
+ #include "base/functional/bind.h"
+ #include "base/functional/callback.h"
+ #include "base/json/values_util.h"
++#include "base/logging.h"
+ #include "base/memory/weak_ptr.h"
+ #include "base/time/time.h"
+ #include "base/types/expected.h"
+ #include "base/types/expected_macros.h"
+ #include "base/values.h"
++#include "build/android_buildflags.h"
+ #include "base/version.h"
+@@ -75,8 +78,21 @@ void IsolatedWebAppUpdateApplyTask::Start(CompletionCallback callback) {
+   has_started_ = true;
+   callback_ = std::move(callback);
+ 
+   debug_log_.Set("start_time", base::TimeToValue(base::Time::Now()));
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  const std::string probe_host = base::CommandLine::ForCurrentProcess()
++                                     ->GetSwitchValueASCII(
++                                         "xenon-test-iwa-update-callback-race");
++  if (!probe_host.empty() && url_info_.web_bundle_id().id() == probe_host) {
++    LOG(ERROR) << "XENON_IWA_MANAGER_PROBE_SYNCHRONOUS_COMPLETE";
++    std::move(callback_).Run(base::unexpected(
++        IsolatedWebAppApplyUpdateCommandError{
++            .message = "Synthetic test completion; no update applied."}));
++    return;
++  }
++#endif
++
+   command_scheduler_->ApplyPendingIsolatedWebAppUpdate(
+       url_info_, std::move(optional_keep_alive_),
+       std::move(optional_profile_keep_alive_),

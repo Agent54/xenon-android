@@ -1,0 +1,48 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -457,11 +457,21 @@ void IsolatedWebAppUpdateManager::Start() {
+       auto& callbacks = on_update_finished_callbacks_[url_info->app_id()];
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppUpdateManager* manager,
++             webapps::AppId app_id,
+              IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_CALLER_SHUTDOWN";
+             manager->Shutdown();
++            if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++                    "xenon-test-iwa-post-shutdown-bool")) {
++              LOG(ERROR) << "XENON_IWA_MANAGER_BOOL_CALL_ENTERED";
++              const bool discover = manager->DiscoverUpdate(app_id);
++              const bool prepare =
++                  manager->MaybeDiscoverAndPrepareUpdate(app_id);
++              LOG(ERROR) << "XENON_IWA_MANAGER_BOOL_RETURNED_" << discover
++                         << "_" << prepare;
++            }
+           },
+-          base::Unretained(this)));
++          base::Unretained(this), url_info->app_id()));
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN";
+@@ -546,3 +556,10 @@ bool IsolatedWebAppUpdateManager::DiscoverUpdate(const webapps::AppId& app_id) {
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "xenon-test-iwa-post-shutdown-bool")) {
++    LOG(ERROR) << "XENON_IWA_MANAGER_DISCOVER_LOOKUP_REACHED";
++    return true;
++  }
++#endif
+   ASSIGN_OR_RETURN(
+       auto url_info_and_options,
+       GetUpdateOptionsIfAllowed(
+@@ -569,3 +586,10 @@ bool IsolatedWebAppUpdateManager::MaybeDiscoverAndPrepareUpdate(
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "xenon-test-iwa-post-shutdown-bool")) {
++    LOG(ERROR) << "XENON_IWA_MANAGER_PREPARE_LOOKUP_REACHED";
++    return true;
++  }
++#endif
+   bool queued_update_discovery_task = MaybeQueueUpdateDiscoverAndPrepareTask(
+       provider_->registrar_unsafe().GetAppById(app_id,
+                                                WebAppFilter::IsIsolatedApp()),

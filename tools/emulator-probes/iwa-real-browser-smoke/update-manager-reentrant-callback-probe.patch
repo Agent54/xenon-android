@@ -1,0 +1,95 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -407,6 +407,11 @@
+   const std::string probe_host = base::CommandLine::ForCurrentProcess()
+                                      ->GetSwitchValueASCII(
+                                          "xenon-test-iwa-update-callback-race");
++  const std::string reentrant_host = base::CommandLine::ForCurrentProcess()
++                                         ->GetSwitchValueASCII(
++                                             "xenon-test-iwa-update-reentrant-app");
++  std::optional<webapps::AppId> primary_probe_id;
++  std::optional<webapps::AppId> secondary_probe_id;
+ #endif
+   for (const WebApp& web_app :
+        provider_->registrar_unsafe().GetApps(WebAppFilter::IsIsolatedApp())) {
+@@ -414,7 +419,11 @@
+         web_app.isolation_data()->pending_update_info().has_value();
+     bool probe_match = false;
+ #if BUILDFLAG(IS_DESKTOP_ANDROID)
+-    probe_match = !probe_host.empty() && web_app.scope().host() == probe_host;
++    const bool primary_match =
++        !probe_host.empty() && web_app.scope().host() == probe_host;
++    const bool secondary_match =
++        !reentrant_host.empty() && web_app.scope().host() == reentrant_host;
++    probe_match = primary_match || secondary_match;
+     if (probe_match && has_pending) {
+       LOG(ERROR) << "XENON_IWA_MANAGER_PROBE_REFUSED_PENDING";
+       continue;
+@@ -425,6 +434,14 @@
+     }
+     auto url_info = IsolatedWebAppUrlInfo::Create(web_app.scope());
+     CHECK(url_info.has_value());
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++    if (primary_match) {
++      primary_probe_id = url_info->app_id();
++    }
++    if (secondary_match) {
++      secondary_probe_id = url_info->app_id();
++    }
++#endif
+ 
+     // Off the record profiles cannot have `ScopedProfileKeepAlive`s.
+     auto profile_keep_alive = std::make_unique<ScopedProfileKeepAlive>(
+@@ -453,6 +470,34 @@
+         std::move(profile_keep_alive), provider_->scheduler(), &*profile_));
+   }
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  if (!reentrant_host.empty()) {
++    if (!primary_probe_id || !secondary_probe_id) {
++      LOG(ERROR) << "XENON_IWA_MANAGER_REENTRANT_PROBE_MISSING_APP";
++    } else {
++      on_update_finished_callbacks_
++          .try_emplace(*primary_probe_id,
++                       std::make_unique<base::OnceCallbackList<void(
++                           IsolatedWebAppApplyUpdateCommandResult)>>())
++          .first->second->AddUnsafe(base::BindOnce(
++              [](IsolatedWebAppUpdateManager* manager,
++                 webapps::AppId secondary_app_id,
++                 IsolatedWebAppApplyUpdateCommandResult) {
++                LOG(ERROR) << "XENON_IWA_MANAGER_REENTRANT_PROBE_ENTER";
++                manager->PrioritizeUpdateAndWait(
++                    secondary_app_id,
++                    base::BindOnce([](IsolatedWebAppApplyUpdateCommandResult) {
++                      LOG(ERROR)
++                          << "XENON_IWA_MANAGER_REENTRANT_PROBE_SECOND_DONE";
++                    }));
++                LOG(ERROR) << "XENON_IWA_MANAGER_REENTRANT_PROBE_RETURN";
++              },
++              base::Unretained(this), *secondary_probe_id));
++      LOG(ERROR) << "XENON_IWA_MANAGER_REENTRANT_PROBE_READY";
++    }
++  }
++#endif
++
+   content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})
+       ->PostTask(FROM_HERE,
+                  base::BindOnce(&IsolatedWebAppUpdateManager::DelayedStart,
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_apply_task.cc
+@@ -84,7 +84,12 @@
+   const std::string probe_host = base::CommandLine::ForCurrentProcess()
+                                      ->GetSwitchValueASCII(
+                                          "xenon-test-iwa-update-callback-race");
+-  if (!probe_host.empty() && url_info_.web_bundle_id().id() == probe_host) {
++  const std::string reentrant_host = base::CommandLine::ForCurrentProcess()
++                                         ->GetSwitchValueASCII(
++                                             "xenon-test-iwa-update-reentrant-app");
++  if ((!probe_host.empty() && url_info_.web_bundle_id().id() == probe_host) ||
++      (!reentrant_host.empty() &&
++       url_info_.web_bundle_id().id() == reentrant_host)) {
+     LOG(ERROR) << "XENON_IWA_MANAGER_PROBE_SYNCHRONOUS_COMPLETE";
+     std::move(callback_).Run(base::unexpected(
+         IsolatedWebAppApplyUpdateCommandError{

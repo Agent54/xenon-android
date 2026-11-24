@@ -1,0 +1,31 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -454,17 +454,27 @@ void IsolatedWebAppUpdateManager::Start() {
+ #if BUILDFLAG(IS_DESKTOP_ANDROID)
++    struct LogCaptureOnDestroy {
++      ~LogCaptureOnDestroy() {
++        LOG(ERROR) << "XENON_IWA_MANAGER_OTHER_APP_CAPTURE_DISCARDED";
++      }
++    };
+     if (probe_match &&
+         base::CommandLine::ForCurrentProcess()->HasSwitch(
+             "xenon-test-iwa-update-caller-shutdown")) {
+       auto& callbacks = on_update_finished_callbacks_[url_info->app_id()];
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppUpdateManager* manager,
+              IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_CALLER_SHUTDOWN";
+             manager->Shutdown();
+           },
+           base::Unretained(this)));
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN";
+           }));
++      on_update_finished_callbacks_["xenon-test-other"].push_back(
++          base::BindOnce(
++              [](std::unique_ptr<LogCaptureOnDestroy>,
++                 IsolatedWebAppApplyUpdateCommandResult) {},
++              std::make_unique<LogCaptureOnDestroy>()));
+     }

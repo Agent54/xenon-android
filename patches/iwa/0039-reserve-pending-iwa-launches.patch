@@ -1,0 +1,293 @@
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+@@ -34,3 +34,60 @@ public class WebappActivityTest {
+ @Config(sdk = 33)
+ public class WebappActivityTest {
++    @Test
++    public void pendingIwaLaunchCountsUntilActivityAcceptsIt() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String token = WebappActivity.reserveIwaLaunch(appId);
++        assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++        assertFalse(WebappActivity.isIwaLaunchResolving("stale-process-token", appId));
++        assertTrue(WebappActivity.markIwaLaunchHandedOff(token, appId));
++        assertFalse(WebappActivity.isIwaLaunchResolving(token, appId));
++        TestWebappActivity wrongApp = new TestWebappActivity();
++        wrongApp.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, "other")
++                .putExtra(WebappActivity.EXTRA_IWA_LAUNCH_TOKEN, token));
++        ApplicationStatus.onStateChangeForTesting(wrongApp, ActivityState.CREATED);
++        try {
++            assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++        } finally {
++            ApplicationStatus.onStateChangeForTesting(wrongApp, ActivityState.DESTROYED);
++        }
++
++        TestWebappActivity activity = new TestWebappActivity();
++        activity.setIntent(
++                new Intent()
++                        .putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId)
++                        .putExtra(WebappActivity.EXTRA_IWA_LAUNCH_TOKEN, token));
++        try {
++            ApplicationStatus.onStateChangeForTesting(activity, ActivityState.CREATED);
++            assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++            ApplicationStatus.onStateChangeForTesting(activity, ActivityState.STOPPED);
++            assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++        } finally {
++            ApplicationStatus.onStateChangeForTesting(activity, ActivityState.DESTROYED);
++            WebappActivity.releaseIwaLaunch(token);
++        }
++        assertEquals(0, WebappActivity.getNumIwaWindowsForApp(appId));
++    }
++
++    @Test
++    public void concurrentIwaReservationsHaveIndependentHandoffOwnership() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String first = WebappActivity.reserveIwaLaunch(appId);
++        String second = WebappActivity.reserveIwaLaunch(appId);
++        try {
++            assertFalse(first.equals(second));
++            assertEquals(2, WebappActivity.getNumIwaWindowsForApp(appId));
++            assertFalse(WebappActivity.markIwaLaunchHandedOff(first, "wrong-app"));
++            assertTrue(WebappActivity.markIwaLaunchHandedOff(first, appId));
++            assertFalse(WebappActivity.markIwaLaunchHandedOff(first, appId));
++            WebappActivity.releaseResolvingIwaLaunch(first);
++            assertEquals(2, WebappActivity.getNumIwaWindowsForApp(appId));
++            WebappActivity.releaseResolvingIwaLaunch(second);
++            assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++        } finally {
++            WebappActivity.releaseIwaLaunch(first);
++            WebappActivity.releaseIwaLaunch(second);
++        }
++        assertEquals(0, WebappActivity.getNumIwaWindowsForApp(appId));
++    }
++
+     @Test
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+@@ -20,2 +20,3 @@
+ 
++import org.chromium.base.ActivityState;
+ import org.chromium.base.ApplicationStatus;
+@@ -35,4 +36,8 @@
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
+ 
++import java.util.HashMap;
++import java.util.Map;
++import java.util.UUID;
++
+ /** Displays a webapp in a nearly UI-less Chrome (InfoBars still appear). */
+@@ -41,3 +46,23 @@
+     public static final String WEBAPP_SCHEME = "webapp";
+ 
++    /** Opaque token carried only by the private activity handoff. */
++    static final String EXTRA_IWA_LAUNCH_TOKEN = "org.agent54.xenon.iwa.LAUNCH_TOKEN";
++
++    private static final class IwaLaunchReservation {
++        final String appId;
++        boolean handedOff;
++
++        IwaLaunchReservation(String appId) {
++            this.appId = appId;
++        }
++    }
++
++    private static final Map<String, IwaLaunchReservation> sPendingIwaLaunches = new HashMap<>();
++    private static final ApplicationStatus.ActivityStateListener sIwaLaunchListener =
++            (activity, newState) -> {
++                if (newState == ActivityState.CREATED && activity instanceof WebappActivity) {
++                    consumeIwaLaunch(activity, activity.getIntent());
++                }
++            };
++
+     /** Counts non-destroyed IWA document activities, including backgrounded ones. */
+@@ -46,3 +71,6 @@
+         ThreadUtils.assertOnUiThread();
+         int count = 0;
++        for (IwaLaunchReservation reservation : sPendingIwaLaunches.values()) {
++            if (appId.equals(reservation.appId)) count++;
++        }
+         for (Activity activity : ApplicationStatus.getRunningActivities()) {
+@@ -74,3 +102,66 @@
+     }
+ 
++    /** Holds a launch across registry resolution and Android activity handoff. */
++    static String reserveIwaLaunch(String appId) {
++        ThreadUtils.assertOnUiThread();
++        if (sPendingIwaLaunches.isEmpty()) {
++            ApplicationStatus.registerStateListenerForAllActivities(sIwaLaunchListener);
++        }
++        String token = UUID.randomUUID().toString();
++        sPendingIwaLaunches.put(token, new IwaLaunchReservation(appId));
++        return token;
++    }
++
++    static boolean isIwaLaunchResolving(String token, String appId) {
++        ThreadUtils.assertOnUiThread();
++        IwaLaunchReservation reservation = sPendingIwaLaunches.get(token);
++        return reservation != null && appId.equals(reservation.appId) && !reservation.handedOff;
++    }
++
++    static boolean markIwaLaunchHandedOff(String token, String appId) {
++        ThreadUtils.assertOnUiThread();
++        IwaLaunchReservation reservation = sPendingIwaLaunches.get(token);
++        if (reservation == null || !appId.equals(reservation.appId) || reservation.handedOff) {
++            return false;
++        }
++        reservation.handedOff = true;
++        return true;
++    }
++
++    static void releaseResolvingIwaLaunch(String token) {
++        ThreadUtils.assertOnUiThread();
++        IwaLaunchReservation reservation = sPendingIwaLaunches.get(token);
++        if (reservation != null && !reservation.handedOff) releaseIwaLaunch(token);
++    }
++
++    static void releaseIwaLaunch(String token) {
++        ThreadUtils.assertOnUiThread();
++        if (sPendingIwaLaunches.remove(token) != null && sPendingIwaLaunches.isEmpty()) {
++            ApplicationStatus.unregisterActivityStateListener(sIwaLaunchListener);
++        }
++    }
++
++    private static void consumeIwaLaunch(Activity activity, Intent incoming) {
++        if (incoming == null || activity.getIntent() == null) return;
++        String appId = IntentUtils.safeGetStringExtra(incoming, IwaLauncherActivity.EXTRA_APP_ID);
++        if (appId == null
++                || !appId.equals(
++                        IntentUtils.safeGetStringExtra(
++                                activity.getIntent(), IwaLauncherActivity.EXTRA_APP_ID))) {
++            return;
++        }
++        String token = IntentUtils.safeGetStringExtra(incoming, EXTRA_IWA_LAUNCH_TOKEN);
++        if (token == null) return;
++        IwaLaunchReservation reservation = sPendingIwaLaunches.get(token);
++        if (reservation != null && reservation.handedOff && appId.equals(reservation.appId)) {
++            releaseIwaLaunch(token);
++        }
++    }
++
++    @Override
++    public void onNewIntent(Intent intent) {
++        super.onNewIntent(intent);
++        consumeIwaLaunch(this, intent);
++    }
++
+     private static @Nullable BrowserServicesIntentDataProvider sIntentDataProviderForTesting;
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
+@@ -33,4 +33,7 @@
+     public static final String ACTION_LAUNCH_IWA = "org.agent54.xenon.iwa.LAUNCH";
+     public static final String EXTRA_APP_ID = "org.agent54.xenon.iwa.APP_ID";
+ 
++    private static final String STATE_LAUNCH_TOKEN = "iwa_launch_token";
++    private @Nullable String mLaunchToken;
++
+     private final Handler mHandler = new Handler(Looper.getMainLooper());
+@@ -57,14 +60,24 @@
+         }
+ 
+-        ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+-        Profile profile = ProfileManager.getLastUsedRegularProfile();
+-        if (profile.isOffTheRecord()) {
+-            finish();
+-            return;
+-        }
+-        String appId = IntentUtils.safeGetStringExtra(intent, EXTRA_APP_ID);
+-        if (appId == null) {
+-            finish();
+-            return;
+-        }
++        String appId = IntentUtils.safeGetStringExtra(intent, EXTRA_APP_ID);
++        if (appId == null) {
++            finish();
++            return;
++        }
++        if (savedInstanceState != null) {
++            String savedToken = savedInstanceState.getString(STATE_LAUNCH_TOKEN);
++            if (savedToken == null || !WebappActivity.isIwaLaunchResolving(savedToken, appId)) {
++                finish();
++                return;
++            }
++            mLaunchToken = savedToken;
++        }
++        if (mLaunchToken == null) mLaunchToken = WebappActivity.reserveIwaLaunch(appId);
++
++        ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
++        Profile profile = ProfileManager.getLastUsedRegularProfile();
++        if (profile.isOffTheRecord()) {
++            finish();
++            return;
++        }
+         mHandler.postDelayed(mTimeout, REGISTRY_TIMEOUT_MS);
+@@ -80,7 +93,12 @@
+         mHandler.removeCallbacks(mTimeout);
+         if (!isFinishing() && !isDestroyed()) {
+-            if (!WebappLauncherActivity.launchInstalledIwa(appId, startUrl, scope, name)) {
+-                Log.e(TAG, "Failed to start the installed IWA activity");
+-            }
++            String launchToken = mLaunchToken;
++            if (launchToken != null
++                    && WebappLauncherActivity.launchInstalledIwa(
++                            appId, startUrl, scope, name, launchToken)) {
++                // The handoff reservation remains until WebappActivity accepts it.
++            } else {
++                Log.e(TAG, "Failed to start the installed IWA activity");
++            }
+         }
+         finish();
+@@ -96,7 +114,16 @@
+     @Override
+     protected void onDestroy() {
+         mHandler.removeCallbacks(mTimeout);
++        if (!isChangingConfigurations() && mLaunchToken != null) {
++            WebappActivity.releaseResolvingIwaLaunch(mLaunchToken);
++        }
+         super.onDestroy();
+     }
+ 
++    @Override
++    protected void onSaveInstanceState(Bundle outState) {
++        outState.putString(STATE_LAUNCH_TOKEN, mLaunchToken);
++        super.onSaveInstanceState(outState);
++    }
++
+     @NativeMethods
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java
+@@ -70,23 +70,28 @@
+     /** Starts a registry-verified IWA in the private standalone activity. */
+-    static boolean launchInstalledIwa(String appId, String url, String scope, String name) {
++    static boolean launchInstalledIwa(
++            String appId, String url, String scope, String name, String launchToken) {
+         Intent sourceIntent = new Intent();
+         sourceIntent.putExtra(WebappConstants.EXTRA_ID, appId);
+         sourceIntent.putExtra(WebappConstants.EXTRA_URL, url);
+         sourceIntent.putExtra(WebappConstants.EXTRA_SCOPE, scope);
+         sourceIntent.putExtra(WebappConstants.EXTRA_NAME, name);
+         sourceIntent.putExtra(WebappConstants.EXTRA_SHORT_NAME, name);
+         sourceIntent.putExtra(WebappConstants.EXTRA_DISPLAY_MODE, DisplayMode.STANDALONE);
+         sourceIntent.putExtra(WebappConstants.EXTRA_SOURCE, ShortcutSource.UNKNOWN);
+ 
+         LaunchData launchData =
+                 new LaunchData(
+                         appId,
+                         url,
+                         /* webApkPackageName= */ null,
+                         /* isSplashProvidedByWebApk= */ false);
+         launchData.isIconTrusted = true;
+         Intent launchIntent = createIntentToLaunchForWebapp(sourceIntent, launchData);
+         launchIntent.putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId);
+-        return IntentUtils.safeStartActivity(
+-                ContextUtils.getApplicationContext(), launchIntent);
++        launchIntent.putExtra(WebappActivity.EXTRA_IWA_LAUNCH_TOKEN, launchToken);
++        if (!WebappActivity.markIwaLaunchHandedOff(launchToken, appId)) return false;
++        boolean started = IntentUtils.safeStartActivity(
++                ContextUtils.getApplicationContext(), launchIntent);
++        if (!started) WebappActivity.releaseIwaLaunch(launchToken);
++        return started;
+     }

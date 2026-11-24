@@ -1,0 +1,39 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -805,16 +805,28 @@
+     std::unique_ptr<IsolatedWebAppUpdateApplyTask> task,
+     IsolatedWebAppApplyUpdateCommandResult status) {
+   TrackResultOfUpdateApplyTask(status);
++
++  const webapps::AppId app_id = task->url_info().app_id();
++  auto weak_this = weak_factory_.GetWeakPtr();
++  std::unique_ptr<
++      base::OnceCallbackList<void(IsolatedWebAppApplyUpdateCommandResult)>>
++      callbacks;
++  auto callbacks_it = on_update_finished_callbacks_.find(app_id);
++  if (callbacks_it != on_update_finished_callbacks_.end()) {
++    callbacks = std::move(callbacks_it->second);
++    on_update_finished_callbacks_.erase(callbacks_it);
++  }
+ 
+   for (auto& observer : task_observers_) {
+-    observer.OnUpdateApplyTaskCompleted(task->url_info().app_id(), status);
++    observer.OnUpdateApplyTaskCompleted(app_id, status);
++    if (!weak_this) {
++      return;
++    }
+   }
+ 
+-  auto callbacks_it =
+-      on_update_finished_callbacks_.find(task->url_info().app_id());
+-  if (callbacks_it != on_update_finished_callbacks_.end()) {
+-    callbacks_it->second->Notify(status);
+-    if (callbacks_it->second->empty()) {
+-      on_update_finished_callbacks_.erase(callbacks_it);
++  if (callbacks) {
++    callbacks->Notify(status);
++    if (!weak_this) {
++      return;
+     }
+   }

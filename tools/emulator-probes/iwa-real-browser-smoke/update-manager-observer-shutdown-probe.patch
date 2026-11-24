@@ -1,0 +1,56 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -351,7 +351,29 @@ std::optional<UpdateInfo> GetUpdateOptionsIfAllowed(
+   return UpdateInfo{.url_info = std::move(url_info),
+                     .update_options = *update_options};
+ }
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++// Disposable emulator-only observer. It removes itself before shutdown so a
++// CheckedObserver never outlives the manager's observer list.
++class XenonShutdownOnApplyObserver final
++    : public IsolatedWebAppUpdateManager::Observer {
++ public:
++  explicit XenonShutdownOnApplyObserver(IsolatedWebAppUpdateManager& manager)
++      : manager_(manager) {}
++
++  void OnUpdateApplyTaskCompleted(
++      const webapps::AppId&,
++      IsolatedWebAppApplyUpdateCommandResult) override {
++    manager_.RemoveObserver(this);
++    LOG(ERROR) << "XENON_IWA_MANAGER_OBSERVER_SHUTDOWN";
++    manager_.Shutdown();
++  }
++
++ private:
++  IsolatedWebAppUpdateManager& manager_;
++};
++#endif
++
+ }  // namespace
+ 
+ IsolatedWebAppUpdateManager::IsolatedWebAppUpdateManager(
+@@ -453,5 +475,22 @@ void IsolatedWebAppUpdateManager::Start() {
+             KeepAliveRestartOption::DISABLED),
+         std::move(profile_keep_alive), provider_->scheduler(), &*profile_));
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++    if (probe_match &&
++        base::CommandLine::ForCurrentProcess()->HasSwitch(
++            "xenon-test-iwa-update-observer-shutdown")) {
++      // Leaked only in this disposable process-level probe. The observer
++      // removes itself before manager shutdown and is never shipped.
++      AddObserver(new XenonShutdownOnApplyObserver(*this));
++      on_update_finished_callbacks_
++          .try_emplace(url_info->app_id(),
++                       std::make_unique<base::OnceCallbackList<void(
++                           IsolatedWebAppApplyUpdateCommandResult)>>())
++          .first->second->AddUnsafe(base::BindOnce(
++              [](IsolatedWebAppApplyUpdateCommandResult) {
++                LOG(ERROR) << "XENON_IWA_MANAGER_CALLBACK_AFTER_SHUTDOWN";
++              }));
++    }
++#endif
+   }
+ 
+   content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})

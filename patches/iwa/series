@@ -36,12 +36,46 @@
 0034-compile-controlled-frame-with-android-extension-core.patch
 0035-enable-controlled-frame-only-for-eligible-android-iwas.patch
 0036-preserve-controlled-frame-runtime-boundaries-on-android.patch
+# Android activity lifecycle and update-safety infrastructure (guard remains).
+0037-generate-vr-buildflags-for-robolectric-url-formatter.patch
+0038-close-only-matching-android-iwa-activities.patch
+0039-reserve-pending-iwa-launches.patch
+0040-count-recreating-iwa-activities.patch
+0041-notify-when-android-iwa-windows-close.patch
+0042-connect-android-iwa-close-waiters.patch
+0043-test-android-iwa-close-bridge.patch
+0044-add-android-iwa-update-lease-admission.patch
+0045-add-native-android-iwa-update-lease-owner.patch
+0046-wire-android-iwa-update-lease-jni-adapter.patch
+0047-test-prioritized-update-callback-ordering.patch
+0048-detach-and-cancel-update-callbacks.patch
+0049-shut-down-update-callbacks-on-destruction.patch
 # Direct Sockets capability: frame-owned only, not a core IWA prerequisite.
 0051-enable-frame-direct-sockets-for-android-iwas.patch
 # Direct Sockets permission regression and Android-only IWA scheme registration.
 0052-test-android-iwa-direct-sockets-content-setting.patch
 0053-register-isolated-app-content-setting-pattern-on-android.patch
+# Standalone IWA warm-launch safety; independent of Direct Sockets.
+0054-reopen-out-of-scope-android-iwa-on-warm-launch.patch
 # Controlled Frame privacy: owner/partition-scoped Helium noise policy and tokens.
 0055-isolate-helium-noise-in-android-controlled-frames.patch
 # Controlled Frame privacy: retain scoped tokens during pre-attach navigation.
 0056-scope-pre-attach-controlled-frame-noise.patch
+# Narrow real-manager callback-order fix; update guard remains enabled.
+0057-register-android-iwa-update-callback-before-start.patch
+# Detach a completion batch before reentrant observer/caller notification.
+0058-detach-android-iwa-update-callbacks-before-notify.patch
+# Invalidate weak completion dispatch when an observer shuts down the manager.
+0059-cancel-android-iwa-update-callbacks-on-shutdown.patch
+# Dispatch detached callbacks individually so caller shutdown stops the batch.
+0060-dispatch-android-iwa-update-callbacks-one-at-a-time.patch
+# Reject bulk update discovery after manager shutdown; other entry points remain open work.
+0061-reject-post-shutdown-iwa-update-discovery.patch
+# Reject explicit single-app update discovery after manager shutdown.
+0062-reject-post-shutdown-single-iwa-update-discovery.patch
+# Reject two boolean discovery APIs after manager shutdown.
+0063-reject-post-shutdown-iwa-update-lookup.patch
+# Complete post-shutdown local-dev discovery requests with an error string.
+0064-reject-post-shutdown-local-dev-iwa-update.patch
+# Keep lifecycle and install-observer entry points inert after manager shutdown.
+0065-reject-iwa-update-lifecycle-after-shutdown.patch

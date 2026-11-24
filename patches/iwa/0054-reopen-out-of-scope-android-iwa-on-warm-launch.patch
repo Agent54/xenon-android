@@ -1,0 +1,126 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+@@ -35,7 +35,10 @@
+ import org.chromium.chrome.browser.browserservices.intents.WebappIntentUtils;
+ import org.chromium.chrome.browser.customtabs.BaseCustomTabActivity;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.tab.Tab;
+ import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
++import org.chromium.components.embedder_support.util.UrlUtilities;
++import org.chromium.content_public.browser.LoadUrlParams;
+ 
+ import java.util.ArrayList;
+ import java.util.HashMap;
+@@ -295,9 +298,49 @@
+         }
+     }
+ 
++    static boolean shouldForceIwaNavigationForLaunch(
++            @Nullable Intent currentIntent,
++            @Nullable Intent incomingIntent,
++            @Nullable String currentUrl) {
++        if (currentIntent == null || incomingIntent == null || TextUtils.isEmpty(currentUrl)) {
++            return false;
++        }
++        String appId = IntentUtils.safeGetStringExtra(incomingIntent, IwaLauncherActivity.EXTRA_APP_ID);
++        if (appId == null
++                || !appId.equals(
++                        IntentUtils.safeGetStringExtra(
++                                currentIntent, IwaLauncherActivity.EXTRA_APP_ID))) {
++            return false;
++        }
++        String token = IntentUtils.safeGetStringExtra(incomingIntent, EXTRA_IWA_LAUNCH_TOKEN);
++        IwaLaunchReservation reservation = token == null ? null : sPendingIwaLaunches.get(token);
++        if (reservation == null || !reservation.handedOff || !appId.equals(reservation.appId)) {
++            return false;
++        }
++        String scope = IntentUtils.safeGetStringExtra(incomingIntent, WebappConstants.EXTRA_SCOPE);
++        String startUrl = IntentUtils.safeGetStringExtra(incomingIntent, WebappConstants.EXTRA_URL);
++        return !TextUtils.isEmpty(scope)
++                && !TextUtils.isEmpty(startUrl)
++                && UrlUtilities.isUrlWithinScope(startUrl, scope)
++                && !UrlUtilities.isUrlWithinScope(currentUrl, scope);
++    }
++
+     @Override
+     public void onNewIntent(Intent intent) {
++        Tab tab = getActivityTab();
++        boolean reopen =
++                shouldForceIwaNavigationForLaunch(
++                        getIntent(), intent, tab == null ? null : tab.getUrl().getSpec());
+         super.onNewIntent(intent);
++        if (reopen) {
++            // The generic webapp handler rejects isolated-app:// intent URLs.
++            // Navigate only a registry-verified warm launch that left scope.
++            String startUrl = IntentUtils.safeGetStringExtra(intent, WebappConstants.EXTRA_URL);
++            if (startUrl != null) {
++                getCustomTabActivityNavigationController()
++                        .navigate(new LoadUrlParams(startUrl), intent);
++            }
++        }
+         consumeIwaLaunch(this, intent);
+     }
+ 
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+@@ -30,6 +30,7 @@
+ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.base.test.util.Features;
+ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
++import org.chromium.chrome.browser.browserservices.intents.WebappConstants;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
+ import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+ import org.chromium.components.webapk.lib.client.WebApkValidator;
+@@ -41,6 +42,50 @@
+ @Config(sdk = 33)
+ public class WebappActivityTest {
+     @Test
++    public void verifiedWarmIwaLaunchNavigatesOnlyWhenOutsideScope() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String scope = "isolated-app://b7looprugym3zyxqffzqdz4mzc2vz4j6ge3arxg2ybbzwgb6ne2qaaic/";
++        String token = WebappActivity.reserveIwaLaunch(appId);
++        try {
++            assertTrue(WebappActivity.markIwaLaunchHandedOff(token, appId));
++            Intent current = new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId);
++            Intent incoming =
++                    new Intent()
++                            .putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId)
++                            .putExtra(WebappActivity.EXTRA_IWA_LAUNCH_TOKEN, token)
++                            .putExtra(WebappConstants.EXTRA_URL, scope)
++                            .putExtra(WebappConstants.EXTRA_SCOPE, scope);
++
++            assertTrue(
++                    WebappActivity.shouldForceIwaNavigationForLaunch(
++                            current, incoming, "about:blank"));
++            assertFalse(
++                    WebappActivity.shouldForceIwaNavigationForLaunch(
++                            current, incoming, scope + "index.html"));
++            assertFalse(
++                    WebappActivity.shouldForceIwaNavigationForLaunch(
++                            current, incoming, null));
++
++            incoming.putExtra(IwaLauncherActivity.EXTRA_APP_ID, "another-app");
++            assertFalse(
++                    WebappActivity.shouldForceIwaNavigationForLaunch(
++                            current, incoming, "about:blank"));
++            incoming.putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId);
++            incoming.putExtra(WebappConstants.EXTRA_URL, "https://example.com/");
++            assertFalse(
++                    WebappActivity.shouldForceIwaNavigationForLaunch(
++                            current, incoming, "about:blank"));
++            incoming.putExtra(WebappConstants.EXTRA_URL, scope);
++            incoming.putExtra(WebappActivity.EXTRA_IWA_LAUNCH_TOKEN, "unverified-token");
++            assertFalse(
++                    WebappActivity.shouldForceIwaNavigationForLaunch(
++                            current, incoming, "about:blank"));
++        } finally {
++            WebappActivity.releaseIwaLaunch(token);
++        }
++    }
++
++    @Test
+     public void pendingIwaLaunchCountsUntilActivityAcceptsIt() {
+         String appId = "idgjjoiemckfcohgjoaafbninphmambh";
+         String token = WebappActivity.reserveIwaLaunch(appId);

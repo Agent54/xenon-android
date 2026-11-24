@@ -1,0 +1,31 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -453,5 +453,27 @@ void IsolatedWebAppUpdateManager::Start() {
+             KeepAliveRestartOption::DISABLED),
+         std::move(profile_keep_alive), provider_->scheduler(), &*profile_));
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++    if (probe_match &&
++        base::CommandLine::ForCurrentProcess()->HasSwitch(
++            "xenon-test-iwa-update-caller-shutdown")) {
++      auto& callbacks = on_update_finished_callbacks_
++                            .try_emplace(url_info->app_id(),
++                                         std::make_unique<base::OnceCallbackList<void(
++                                             IsolatedWebAppApplyUpdateCommandResult)>>())
++                            .first->second;
++      callbacks->AddUnsafe(base::BindOnce(
++          [](IsolatedWebAppUpdateManager* manager,
++             IsolatedWebAppApplyUpdateCommandResult) {
++            LOG(ERROR) << "XENON_IWA_MANAGER_CALLER_SHUTDOWN";
++            manager->Shutdown();
++          },
++          base::Unretained(this)));
++      callbacks->AddUnsafe(base::BindOnce(
++          [](IsolatedWebAppApplyUpdateCommandResult) {
++            LOG(ERROR) << "XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN";
++          }));
++    }
++#endif
+   }
+ 
+   content::GetUIThreadTaskRunner({base::TaskPriority::BEST_EFFORT})

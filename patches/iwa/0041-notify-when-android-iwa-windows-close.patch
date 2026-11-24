@@ -1,0 +1,284 @@
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+@@ -23,4 +23,5 @@
+ import org.chromium.base.ActivityState;
+ import org.chromium.base.ApplicationStatus;
++import org.chromium.base.JniOnceRunnable;
+ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.base.test.util.Features;
+@@ -211,4 +212,152 @@
+         }
+     }
+ 
++    @Test
++    public void iwaClosedCallbackWaitsForLastActivityAndIsOneShot() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        TestWebappActivity foreground = new TestWebappActivity();
++        foreground.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId));
++        TestWebappActivity background = new TestWebappActivity();
++        background.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId));
++        ApplicationStatus.onStateChangeForTesting(foreground, ActivityState.CREATED);
++        ApplicationStatus.onStateChangeForTesting(background, ActivityState.CREATED);
++        TestOnceRunnable callback = new TestOnceRunnable();
++        try {
++            WebappActivity.notifyOnAllIwaWindowsClosed(appId, callback);
++            ApplicationStatus.onStateChangeForTesting(background, ActivityState.STOPPED);
++            assertEquals(0, callback.runCount);
++            ApplicationStatus.onStateChangeForTesting(foreground, ActivityState.DESTROYED);
++            assertEquals(0, callback.runCount);
++            ApplicationStatus.onStateChangeForTesting(background, ActivityState.DESTROYED);
++            assertEquals(1, callback.runCount);
++            assertEquals(0, callback.destroyCount);
++        } finally {
++            if (ApplicationStatus.getStateForActivity(foreground) != ActivityState.DESTROYED) {
++                ApplicationStatus.onStateChangeForTesting(foreground, ActivityState.DESTROYED);
++            }
++            if (ApplicationStatus.getStateForActivity(background) != ActivityState.DESTROYED) {
++                ApplicationStatus.onStateChangeForTesting(background, ActivityState.DESTROYED);
++            }
++        }
++    }
++
++    @Test
++    public void iwaClosedCallbackCountsPendingLaunchAndRecreation() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String launch = WebappActivity.reserveIwaLaunch(appId);
++        TestOnceRunnable launchCallback = new TestOnceRunnable();
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, launchCallback);
++        try {
++            assertEquals(0, launchCallback.runCount);
++        } finally {
++            WebappActivity.releaseIwaLaunch(launch);
++        }
++        assertEquals(1, launchCallback.runCount);
++
++        String recreation = "recreation-reservation";
++        WebappActivity.reserveIwaRecreation(recreation, appId);
++        TestOnceRunnable recreationCallback = new TestOnceRunnable();
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, recreationCallback);
++        try {
++            assertEquals(0, recreationCallback.runCount);
++        } finally {
++            WebappActivity.consumeIwaRecreation(recreation, appId);
++        }
++        assertEquals(1, recreationCallback.runCount);
++    }
++
++    @Test
++    public void iwaClosedCallbackCancellationDestroysOnlyItsWaiter() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String launch = WebappActivity.reserveIwaLaunch(appId);
++        TestOnceRunnable cancelled = new TestOnceRunnable();
++        TestOnceRunnable retained = new TestOnceRunnable();
++        String cancelledId = WebappActivity.notifyOnAllIwaWindowsClosed(appId, cancelled);
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, retained);
++        WebappActivity.cancelIwaWindowsClosedCallback(cancelledId);
++        WebappActivity.cancelIwaWindowsClosedCallback(cancelledId);
++        assertEquals(1, cancelled.destroyCount);
++        WebappActivity.releaseIwaLaunch(launch);
++        assertEquals(0, cancelled.runCount);
++        assertEquals(1, retained.runCount);
++        assertEquals(0, retained.destroyCount);
++    }
++
++    @Test
++    public void iwaClosedCallbackCanReenterRegistration() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        TestOnceRunnable nested = new TestOnceRunnable();
++        TestOnceRunnable outer =
++                new TestOnceRunnable() {
++                    @Override
++                    public void run() {
++                        super.run();
++                        WebappActivity.notifyOnAllIwaWindowsClosed(appId, nested);
++                    }
++                };
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, outer);
++        assertEquals(1, outer.runCount);
++        assertEquals(1, nested.runCount);
++    }
++
++    @Test
++    public void iwaClosedCallbackCanCancelLaterWaiter() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String launch = WebappActivity.reserveIwaLaunch(appId);
++        String[] secondId = new String[1];
++        TestOnceRunnable second = new TestOnceRunnable();
++        TestOnceRunnable first =
++                new TestOnceRunnable() {
++                    @Override
++                    public void run() {
++                        super.run();
++                        WebappActivity.cancelIwaWindowsClosedCallback(secondId[0]);
++                    }
++                };
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, first);
++        secondId[0] = WebappActivity.notifyOnAllIwaWindowsClosed(appId, second);
++        WebappActivity.releaseIwaLaunch(launch);
++        assertEquals(1, first.runCount);
++        assertEquals(0, second.runCount);
++        assertEquals(1, second.destroyCount);
++    }
++
++    @Test
++    public void iwaClosedCallbackRechecksAfterNewLaunch() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String launch = WebappActivity.reserveIwaLaunch(appId);
++        String[] reopened = new String[1];
++        TestOnceRunnable second = new TestOnceRunnable();
++        TestOnceRunnable first =
++                new TestOnceRunnable() {
++                    @Override
++                    public void run() {
++                        super.run();
++                        reopened[0] = WebappActivity.reserveIwaLaunch(appId);
++                    }
++                };
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, first);
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, second);
++        WebappActivity.releaseIwaLaunch(launch);
++        assertEquals(1, first.runCount);
++        assertEquals(0, second.runCount);
++        WebappActivity.releaseIwaLaunch(reopened[0]);
++        assertEquals(1, second.runCount);
++    }
++
++    private static class TestOnceRunnable implements JniOnceRunnable {
++        int runCount;
++        int destroyCount;
++
++        @Override
++        public void run() {
++            runCount++;
++        }
++
++        @Override
++        public void destroy() {
++            destroyCount++;
++        }
++    }
++
+     private static class TestWebappActivity extends WebappActivity {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+@@ -21,5 +21,6 @@
+ import org.chromium.base.ActivityState;
+ import org.chromium.base.ApplicationStatus;
+ import org.chromium.base.IntentUtils;
++import org.chromium.base.JniOnceRunnable;
+ import org.chromium.base.ResettersForTesting;
+ import org.chromium.base.ThreadUtils;
+@@ -39,3 +40,6 @@
++import java.util.ArrayList;
+ import java.util.HashMap;
++import java.util.LinkedHashMap;
++import java.util.List;
+ import java.util.Map;
+ import java.util.UUID;
+@@ -59,6 +63,17 @@
+     }
+ 
++    private static final class IwaCloseWaiter {
++        final String appId;
++        final JniOnceRunnable callback;
++
++        IwaCloseWaiter(String appId, JniOnceRunnable callback) {
++            this.appId = appId;
++            this.callback = callback;
++        }
++    }
++
+     private static final Map<String, IwaLaunchReservation> sPendingIwaLaunches = new HashMap<>();
+     private static final Map<String, String> sRecreatingIwaActivities = new HashMap<>();
++    private static final Map<String, IwaCloseWaiter> sIwaCloseWaiters = new LinkedHashMap<>();
+     private static final ApplicationStatus.ActivityStateListener sIwaLaunchListener =
+             (activity, newState) -> {
+@@ -69,5 +84,8 @@
+                     String appId = webappActivity.getIwaAppId();
+                     if (token != null && appId != null) consumeIwaRecreation(token, appId);
+                 }
++                if (newState == ActivityState.CREATED || newState == ActivityState.DESTROYED) {
++                    maybeNotifyIwaWindowsClosed();
++                }
+             };
+ 
+@@ -111,5 +129,42 @@
+         }
+     }
+ 
++    /** Waits for pending handoffs, recreation reservations, and live activities to clear. */
++    @CalledByNative
++    static String notifyOnAllIwaWindowsClosed(
++            @JniType("std::string") String appId, JniOnceRunnable callback) {
++        ThreadUtils.assertOnUiThread();
++        ensureIwaWindowListener();
++        String waiterId = UUID.randomUUID().toString();
++        sIwaCloseWaiters.put(waiterId, new IwaCloseWaiter(appId, callback));
++        maybeNotifyIwaWindowsClosed();
++        return waiterId;
++    }
++
++    /** Native UI-manager shutdown must release callbacks that never ran. */
++    @CalledByNative
++    static void cancelIwaWindowsClosedCallback(@JniType("std::string") String waiterId) {
++        ThreadUtils.assertOnUiThread();
++        IwaCloseWaiter waiter = sIwaCloseWaiters.remove(waiterId);
++        maybeUnregisterIwaWindowListener();
++        if (waiter != null) waiter.callback.destroy();
++    }
++
++    private static void maybeNotifyIwaWindowsClosed() {
++        ThreadUtils.assertOnUiThread();
++        if (sIwaCloseWaiters.isEmpty()) {
++            maybeUnregisterIwaWindowListener();
++            return;
++        }
++        List<String> waiterIds = new ArrayList<>(sIwaCloseWaiters.keySet());
++        for (String waiterId : waiterIds) {
++            IwaCloseWaiter waiter = sIwaCloseWaiters.get(waiterId);
++            if (waiter == null || getNumIwaWindowsForApp(waiter.appId) != 0) continue;
++            sIwaCloseWaiters.remove(waiterId);
++            maybeUnregisterIwaWindowListener();
++            waiter.callback.run();
++        }
++    }
++
+     /** Holds a launch across registry resolution and Android activity handoff. */
+     static String reserveIwaLaunch(String appId) {
+@@ -145,7 +204,7 @@
+ 
+     static void releaseIwaLaunch(String token) {
+         ThreadUtils.assertOnUiThread();
+-        if (sPendingIwaLaunches.remove(token) != null) maybeUnregisterIwaWindowListener();
++        if (sPendingIwaLaunches.remove(token) != null) maybeNotifyIwaWindowsClosed();
+     }
+ 
+     /** Keeps an IWA counted between the old activity's destruction and replacement creation. */
+@@ -158,18 +219,22 @@
+     static boolean consumeIwaRecreation(String token, String appId) {
+         ThreadUtils.assertOnUiThread();
+         if (!appId.equals(sRecreatingIwaActivities.get(token))) return false;
+         sRecreatingIwaActivities.remove(token);
+-        maybeUnregisterIwaWindowListener();
++        maybeNotifyIwaWindowsClosed();
+         return true;
+     }
+ 
+     private static void ensureIwaWindowListener() {
+-        if (sPendingIwaLaunches.isEmpty() && sRecreatingIwaActivities.isEmpty()) {
++        if (sPendingIwaLaunches.isEmpty()
++                && sRecreatingIwaActivities.isEmpty()
++                && sIwaCloseWaiters.isEmpty()) {
+             ApplicationStatus.registerStateListenerForAllActivities(sIwaLaunchListener);
+         }
+     }
+ 
+     private static void maybeUnregisterIwaWindowListener() {
+-        if (sPendingIwaLaunches.isEmpty() && sRecreatingIwaActivities.isEmpty()) {
++        if (sPendingIwaLaunches.isEmpty()
++                && sRecreatingIwaActivities.isEmpty()
++                && sIwaCloseWaiters.isEmpty()) {
+             ApplicationStatus.unregisterActivityStateListener(sIwaLaunchListener);
+         }

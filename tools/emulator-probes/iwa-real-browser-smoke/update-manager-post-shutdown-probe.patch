@@ -1,0 +1,29 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -460,6 +460,13 @@ void IsolatedWebAppUpdateManager::Start() {
+           [](IsolatedWebAppUpdateManager* manager,
+              IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_CALLER_SHUTDOWN";
+             manager->Shutdown();
++            if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++                    "xenon-test-iwa-post-shutdown-reentry")) {
++              LOG(ERROR) << "XENON_IWA_MANAGER_POST_SHUTDOWN_CALL_ENTERED";
++              const size_t queued = manager->DiscoverAndPrepareUpdatesNow();
++              LOG(ERROR) << "XENON_IWA_MANAGER_POST_SHUTDOWN_CALL_RETURNED_"
++                         << queued;
++            }
+           },
+           base::Unretained(this)));
+@@ -702,4 +709,11 @@ size_t IsolatedWebAppUpdateManager::QueueUpdateDiscoverAndPrepareTasks() {
+ size_t IsolatedWebAppUpdateManager::QueueUpdateDiscoverAndPrepareTasks() {
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "xenon-test-iwa-post-shutdown-reentry")) {
++    LOG(ERROR) << "XENON_IWA_MANAGER_POST_SHUTDOWN_QUEUE_REACHED";
++    return 0;
++  }
++#endif
+   // Clear the log of previously finished update discovery tasks when queueing
+   // new tasks so that it doesn't grow forever.
+   task_queue_.ClearUpdateDiscoveryLog();

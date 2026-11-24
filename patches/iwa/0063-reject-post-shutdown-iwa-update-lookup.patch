@@ -1,0 +1,19 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -543,3 +543,7 @@ bool IsolatedWebAppUpdateManager::DiscoverUpdate(const webapps::AppId& app_id) {
++  if (has_shutdown_) {
++    return false;
++  }
++
+   ASSIGN_OR_RETURN(
+       auto url_info_and_options,
+       GetUpdateOptionsIfAllowed(
+@@ -566,3 +570,7 @@ bool IsolatedWebAppUpdateManager::MaybeDiscoverAndPrepareUpdate(
++  if (has_shutdown_) {
++    return false;
++  }
++
+   bool queued_update_discovery_task = MaybeQueueUpdateDiscoverAndPrepareTask(
+       provider_->registrar_unsafe().GetAppById(app_id,
+                                                WebAppFilter::IsIsolatedApp()),

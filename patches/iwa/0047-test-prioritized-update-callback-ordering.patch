@@ -1,0 +1,343 @@
+diff --git a/chrome/browser/web_applications/BUILD.gn b/chrome/browser/web_applications/BUILD.gn
+index 3e1245c..d44f8a7 100644
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -305,8 +305,6 @@ source_set("web_applications") {
+     "scheduler/generated_icon_fix_result.h",
+     "scheduler/install_migrate_to_app_result.cc",
+     "scheduler/install_migrate_to_app_result.h",
+-    "scheduler/isolated_web_app_apply_update_result.cc",
+-    "scheduler/isolated_web_app_apply_update_result.h",
+     "scheduler/launch_or_reparent_result.cc",
+     "scheduler/launch_or_reparent_result.h",
+     "scheduler/manifest_silent_update_result.cc",
+@@ -735,6 +733,7 @@ source_set("web_applications") {
+ 
+   public_deps = [
+     ":app_id_helpers",
++    ":isolated_web_app_apply_update_result",
+     ":iwa_types",
+     "//chrome/browser:browser_public_dependencies",
+     "//chrome/browser/web_applications/isolated_web_apps:isolated_web_apps_no_pwa_core_deps",
+@@ -1659,6 +1658,26 @@ source_set("app_id_helpers") {
+   ]
+ }
+ 
++source_set("isolated_web_app_apply_update_result") {
++  sources = [
++    "scheduler/isolated_web_app_apply_update_result.cc",
++    "scheduler/isolated_web_app_apply_update_result.h",
++  ]
++  deps = [ "//base" ]
++}
++
++source_set("isolated_web_app_update_callbacks") {
++  sources = [
++    "isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc",
++    "isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h",
++  ]
++  deps = [
++    "//base",
++    "//components/webapps/common",
++  ]
++  public_deps = [ ":isolated_web_app_apply_update_result" ]
++}
++
+ if (is_desktop_android) {
+   source_set("android_iwa_close_waiter_bridge") {
+     sources = [
+@@ -1703,4 +1722,17 @@ if (is_desktop_android) {
+       "//testing/gtest",
+     ]
+   }
++
++  test("isolated_web_app_update_callback_unittests") {
++    sources = [
++      "isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc",
++    ]
++    deps = [
++      ":isolated_web_app_update_callbacks",
++      "//base/test:run_all_unittests",
++      "//base/test:test_support",
++      "//testing/android/native_test:native_test_native_code",
++      "//testing/gtest",
++    ]
++  }
+ }
+diff --git a/chrome/browser/web_applications/scheduler/isolated_web_app_apply_update_result.h b/chrome/browser/web_applications/scheduler/isolated_web_app_apply_update_result.h
+index 3ba345f..47a5fb0 100644
+--- a/chrome/browser/web_applications/scheduler/isolated_web_app_apply_update_result.h
++++ b/chrome/browser/web_applications/scheduler/isolated_web_app_apply_update_result.h
+@@ -5,6 +5,9 @@
+ #ifndef CHROME_BROWSER_WEB_APPLICATIONS_SCHEDULER_ISOLATED_WEB_APP_APPLY_UPDATE_RESULT_H_
+ #define CHROME_BROWSER_WEB_APPLICATIONS_SCHEDULER_ISOLATED_WEB_APP_APPLY_UPDATE_RESULT_H_
+ 
++#include <iosfwd>
++#include <string>
++
+ #include "base/types/expected.h"
+ 
+ namespace web_app {
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h
+new file mode 100644
+index 0000000..4e6d167
+--- /dev/null
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h
+@@ -0,0 +1,54 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_WEB_APPLICATIONS_ISOLATED_WEB_APPS_UPDATE_ISOLATED_WEB_APP_UPDATE_CALLBACK_COORDINATOR_H_
++#define CHROME_BROWSER_WEB_APPLICATIONS_ISOLATED_WEB_APPS_UPDATE_ISOLATED_WEB_APP_UPDATE_CALLBACK_COORDINATOR_H_
++
++#include <vector>
++
++#include "base/containers/flat_map.h"
++#include "base/functional/callback.h"
++#include "base/memory/weak_ptr.h"
++#include "chrome/browser/web_applications/scheduler/isolated_web_app_apply_update_result.h"
++#include "components/webapps/common/web_app_id.h"
++
++namespace web_app {
++
++// Coordinates prioritized update starts with their one-shot completion
++// callbacks. The queue callbacks must run on the same sequence as this object.
++// IsQueuedCallback must be a non-reentrant query that does not destroy the
++// coordinator; StartCallback may complete or destroy it synchronously.
++class IsolatedWebAppUpdateCallbackCoordinator {
++ public:
++  using ResultCallback =
++      base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)>;
++  using IsQueuedCallback =
++      base::RepeatingCallback<bool(const webapps::AppId&)>;
++  using StartCallback =
++      base::RepeatingCallback<void(const webapps::AppId&)>;
++
++  IsolatedWebAppUpdateCallbackCoordinator(IsQueuedCallback is_queued,
++                                          StartCallback start);
++  ~IsolatedWebAppUpdateCallbackCoordinator();
++
++  IsolatedWebAppUpdateCallbackCoordinator(
++      const IsolatedWebAppUpdateCallbackCoordinator&) = delete;
++  IsolatedWebAppUpdateCallbackCoordinator& operator=(
++      const IsolatedWebAppUpdateCallbackCoordinator&) = delete;
++
++  void PrioritizeAndWait(webapps::AppId app_id, ResultCallback callback);
++  void Complete(webapps::AppId app_id,
++                IsolatedWebAppApplyUpdateCommandResult result);
++
++ private:
++  IsQueuedCallback is_queued_;
++  StartCallback start_;
++  base::flat_map<webapps::AppId, std::vector<ResultCallback>> callbacks_;
++  base::WeakPtrFactory<IsolatedWebAppUpdateCallbackCoordinator> weak_factory_{
++      this};
++};
++
++}  // namespace web_app
++
++#endif  // CHROME_BROWSER_WEB_APPLICATIONS_ISOLATED_WEB_APPS_UPDATE_ISOLATED_WEB_APP_UPDATE_CALLBACK_COORDINATOR_H_
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc
+new file mode 100644
+index 0000000..04e14f5
+--- /dev/null
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc
+@@ -0,0 +1,62 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h"
++
++#include <utility>
++
++#include "base/functional/bind.h"
++#include "base/location.h"
++#include "base/task/sequenced_task_runner.h"
++
++namespace web_app {
++
++IsolatedWebAppUpdateCallbackCoordinator::
++    IsolatedWebAppUpdateCallbackCoordinator(IsQueuedCallback is_queued,
++                                            StartCallback start)
++    : is_queued_(std::move(is_queued)), start_(std::move(start)) {}
++
++IsolatedWebAppUpdateCallbackCoordinator::
++    ~IsolatedWebAppUpdateCallbackCoordinator() = default;
++
++void IsolatedWebAppUpdateCallbackCoordinator::PrioritizeAndWait(
++    webapps::AppId app_id,
++    ResultCallback callback) {
++  if (!is_queued_.Run(app_id)) {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE,
++        base::BindOnce(
++            std::move(callback),
++            base::unexpected(IsolatedWebAppApplyUpdateCommandError{
++                .message = "Update is not currently being applied."})));
++    return;
++  }
++
++  // Starting may complete synchronously and destroy this coordinator. Register
++  // first, then make the start call the final operation on this object.
++  callbacks_[app_id].push_back(std::move(callback));
++  StartCallback start = start_;
++  start.Run(app_id);
++}
++
++void IsolatedWebAppUpdateCallbackCoordinator::Complete(
++    webapps::AppId app_id,
++    IsolatedWebAppApplyUpdateCommandResult result) {
++  auto it = callbacks_.find(app_id);
++  if (it == callbacks_.end()) {
++    return;
++  }
++  std::vector<ResultCallback> callbacks = std::move(it->second);
++  callbacks_.erase(it);
++  base::WeakPtr<IsolatedWebAppUpdateCallbackCoordinator> weak_this =
++      weak_factory_.GetWeakPtr();
++  for (ResultCallback& callback : callbacks) {
++    std::move(callback).Run(result);
++    if (!weak_this) {
++      return;
++    }
++  }
++}
++
++}  // namespace web_app
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc
+new file mode 100644
+index 0000000..1feb334
+--- /dev/null
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc
+@@ -0,0 +1,129 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h"
++
++#include <memory>
++
++#include "base/functional/bind.h"
++#include "base/test/task_environment.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace web_app {
++namespace {
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     SynchronousCompletionNotifiesRegisteredCallbackOnce) {
++  base::test::TaskEnvironment task_environment;
++  std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator> coordinator;
++  coordinator = std::make_unique<IsolatedWebAppUpdateCallbackCoordinator>(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating(
++          [](std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator>* owner,
++             const webapps::AppId& app_id) {
++            (*owner)->Complete(app_id, base::ok());
++          },
++          &coordinator));
++
++  int notification_count = 0;
++  coordinator->PrioritizeAndWait(
++      "app", base::BindOnce(
++                 [](int* count,
++                    IsolatedWebAppApplyUpdateCommandResult result) {
++                   EXPECT_TRUE(result.has_value());
++                   ++*count;
++                 },
++                 &notification_count));
++
++  EXPECT_EQ(notification_count, 1);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     AbsentTaskPostsErrorWithoutStarting) {
++  base::test::TaskEnvironment task_environment;
++  int starts = 0;
++  IsolatedWebAppUpdateCallbackCoordinator coordinator(
++      base::BindRepeating([](const webapps::AppId&) { return false; }),
++      base::BindRepeating(
++          [](int* count, const webapps::AppId&) { ++*count; }, &starts));
++
++  int errors = 0;
++  coordinator.PrioritizeAndWait(
++      "missing", base::BindOnce(
++                     [](int* count,
++                        IsolatedWebAppApplyUpdateCommandResult result) {
++                       EXPECT_FALSE(result.has_value());
++                       ++*count;
++                     },
++                     &errors));
++  EXPECT_EQ(errors, 0);
++  task_environment.RunUntilIdle();
++  EXPECT_EQ(errors, 1);
++  EXPECT_EQ(starts, 0);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     OwnerDestructionCancelsRemainingCallbacks) {
++  base::test::TaskEnvironment task_environment;
++  auto coordinator = std::make_unique<IsolatedWebAppUpdateCallbackCoordinator>(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating([](const webapps::AppId&) {}));
++  int first_calls = 0;
++  int second_calls = 0;
++  coordinator->PrioritizeAndWait(
++      "app", base::BindOnce(
++                 [](std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator>*
++                        owner,
++                    int* count, IsolatedWebAppApplyUpdateCommandResult result) {
++                   EXPECT_TRUE(result.has_value());
++                   ++*count;
++                   owner->reset();
++                 },
++                 &coordinator, &first_calls));
++  coordinator->PrioritizeAndWait(
++      "app", base::BindOnce(
++                 [](int* count, IsolatedWebAppApplyUpdateCommandResult) {
++                   ++*count;
++                 },
++                 &second_calls));
++
++  coordinator->Complete("app", base::ok());
++  EXPECT_EQ(first_calls, 1);
++  EXPECT_EQ(second_calls, 0);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     ReentrantSameAppRegistrationIsForNextGeneration) {
++  base::test::TaskEnvironment task_environment;
++  IsolatedWebAppUpdateCallbackCoordinator coordinator(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating([](const webapps::AppId&) {}));
++  int first_calls = 0;
++  int next_generation_calls = 0;
++  coordinator.PrioritizeAndWait(
++      "app", base::BindOnce(
++                 [](IsolatedWebAppUpdateCallbackCoordinator* owner,
++                    int* first_count, int* next_count,
++                    IsolatedWebAppApplyUpdateCommandResult result) {
++                   EXPECT_TRUE(result.has_value());
++                   ++*first_count;
++                   owner->PrioritizeAndWait(
++                       "app", base::BindOnce(
++                                  [](int* count,
++                                     IsolatedWebAppApplyUpdateCommandResult) {
++                                    ++*count;
++                                  },
++                                  next_count));
++                 },
++                 &coordinator, &first_calls, &next_generation_calls));
++
++  coordinator.Complete("app", base::ok());
++  EXPECT_EQ(first_calls, 1);
++  EXPECT_EQ(next_generation_calls, 0);
++  coordinator.Complete("app", base::ok());
++  EXPECT_EQ(next_generation_calls, 1);
++}
++
++}  // namespace
++}  // namespace web_app

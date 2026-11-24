@@ -1,0 +1,22 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -467,15 +467,11 @@ void IsolatedWebAppUpdateManager::Start() {
+-      auto& callbacks = on_update_finished_callbacks_
+-                            .try_emplace(url_info->app_id(),
+-                                         std::make_unique<base::OnceCallbackList<void(
+-                                             IsolatedWebAppApplyUpdateCommandResult)>>())
+-                            .first->second;
+-      callbacks->AddUnsafe(base::BindOnce(
++      auto& callbacks = on_update_finished_callbacks_[url_info->app_id()];
++      callbacks.push_back(base::BindOnce(
+           [](std::unique_ptr<ShutdownOnCaptureDestruction> captured,
+              IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_CAPTURE_CALLBACK_RETURNING";
+           },
+           std::make_unique<ShutdownOnCaptureDestruction>(this)));
+-      callbacks->AddUnsafe(base::BindOnce(
++      callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN";
+           }));

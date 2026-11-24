@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -460,4 +460,8 @@ void IsolatedWebAppUpdateManager::Shutdown() {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+ 
++  // Completion observers can shut down the manager while a detached callback
++  // batch is being dispatched. Invalidate that dispatch before teardown.
++  weak_factory_.InvalidateWeakPtrs();
++
+   // Stop all potentially ongoing tasks and avoid scheduling new tasks.
+   install_manager_observation_.Reset();

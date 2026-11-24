@@ -1,0 +1,39 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -452,23 +452,31 @@ void IsolatedWebAppUpdateManager::Start() {
+             KeepAliveRestartOption::DISABLED),
+         std::move(profile_keep_alive), provider_->scheduler(), &*profile_));
+ #if BUILDFLAG(IS_DESKTOP_ANDROID)
++    struct ShutdownOnCaptureDestruction {
++      explicit ShutdownOnCaptureDestruction(IsolatedWebAppUpdateManager* owner)
++          : owner(owner) {}
++      ~ShutdownOnCaptureDestruction() {
++        LOG(ERROR) << "XENON_IWA_MANAGER_CAPTURE_DESTRUCTOR_SHUTDOWN";
++        owner->Shutdown();
++      }
++      IsolatedWebAppUpdateManager* owner;
++    };
+     if (probe_match &&
+         base::CommandLine::ForCurrentProcess()->HasSwitch(
+             "xenon-test-iwa-update-caller-shutdown")) {
+       auto& callbacks = on_update_finished_callbacks_
+                             .try_emplace(url_info->app_id(),
+                                          std::make_unique<base::OnceCallbackList<void(
+                                              IsolatedWebAppApplyUpdateCommandResult)>>())
+                             .first->second;
+       callbacks->AddUnsafe(base::BindOnce(
+-          [](IsolatedWebAppUpdateManager* manager,
++          [](std::unique_ptr<ShutdownOnCaptureDestruction> captured,
+              IsolatedWebAppApplyUpdateCommandResult) {
+-            LOG(ERROR) << "XENON_IWA_MANAGER_CALLER_SHUTDOWN";
+-            manager->Shutdown();
++            LOG(ERROR) << "XENON_IWA_MANAGER_CAPTURE_CALLBACK_RETURNING";
+           },
+-          base::Unretained(this)));
++          std::make_unique<ShutdownOnCaptureDestruction>(this)));
+       callbacks->AddUnsafe(base::BindOnce(
+           [](IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN";
+           }));
+     }

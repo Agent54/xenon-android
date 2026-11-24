@@ -1,0 +1,49 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -110,4 +110,12 @@ class IsolatedWebAppUpdateManager::LocalDevModeUpdateDiscoverer {
+                            const IsolatedWebAppUrlInfo& url_info,
+                            Callback callback) {
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++            "xenon-test-iwa-post-shutdown-local-dev")) {
++      LOG(ERROR) << "XENON_IWA_MANAGER_LOCAL_DISCOVERER_REACHED";
++      std::move(callback).Run(base::unexpected("test-only lookup reached"));
++      return;
++    }
++#endif
+     if (!provider_->registrar_unsafe().AppMatches(
+             url_info.app_id(), WebAppFilter::IsDevModeIsolatedApp())) {
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -457,11 +466,28 @@ void IsolatedWebAppUpdateManager::Start() {
+       auto& callbacks = on_update_finished_callbacks_[url_info->app_id()];
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppUpdateManager* manager,
++             IsolatedWebAppUrlInfo url_info,
+              IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_CALLER_SHUTDOWN";
+             manager->Shutdown();
++            if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++                    "xenon-test-iwa-post-shutdown-local-dev")) {
++              LOG(ERROR) << "XENON_IWA_MANAGER_LOCAL_CALL_ENTERED";
++              manager->DiscoverApplyAndPrioritizeLocalDevModeUpdate(
++                  IwaSourceBundleDevModeWithFileOp(
++                      base::FilePath(), IwaSourceBundleDevFileOp::kCopy),
++                  url_info,
++                  base::BindOnce([](base::expected<IwaVersion, std::string> result) {
++                    LOG(ERROR) << (result.has_value() ?
++                                      "XENON_IWA_MANAGER_LOCAL_CALLBACK_VALUE" :
++                                      result.error() == "IWA update manager has shut down." ?
++                                          "XENON_IWA_MANAGER_LOCAL_CALLBACK_SHUTDOWN" :
++                                          "XENON_IWA_MANAGER_LOCAL_CALLBACK_OTHER_ERROR");
++                  }));
++              LOG(ERROR) << "XENON_IWA_MANAGER_LOCAL_CALL_RETURNED";
++            }
+           },
+-          base::Unretained(this)));
++          base::Unretained(this), *url_info));
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN";

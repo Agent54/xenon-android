@@ -1,0 +1,118 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -2557,5 +2557,6 @@
+     sources = [
+       "javatests/src/org/chromium/chrome/test/smoke/ChromeTabSwitcherTest.java",
++      "javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java",
+       "javatests/src/org/chromium/chrome/test/smoke/utilities/FirstRunNavigator.java",
+     ]
+     deps = [
+diff --git a/chrome/android/javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java b/chrome/android/javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java
+new file mode 100644
+--- /dev/null
++++ b/chrome/android/javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java
+@@ -0,0 +1,103 @@
++// Copyright 2026 Agent54
++// Disposable emulator-only real-browser smoke test. Never ship this test APK.
++package org.chromium.chrome.test.smoke;
++
++import static com.google.common.truth.Truth.assertThat;
++
++import android.content.Context;
++import android.content.Intent;
++
++import androidx.test.core.app.ApplicationProvider;
++import androidx.test.internal.runner.junit4.AndroidJUnit4ClassRunner;
++import androidx.test.platform.app.InstrumentationRegistry;
++import androidx.test.uiautomator.UiDevice;
++import androidx.test.uiautomator.Until;
++import androidx.test.uiautomator.By;
++
++import org.junit.Test;
++import org.junit.runner.RunWith;
++
++@RunWith(AndroidJUnit4ClassRunner.class)
++public class XenonIwaShimSmokeTest {
++    private static final String BROWSER_PACKAGE = "org.agent54.xenon.iwa";
++    private static final String SHIM_PACKAGE = "org.agent54.xenon.iwa.kitchensink";
++
++    @Test
++    public void testAppOwnedShimOpensInstalledIwa() throws Exception {
++        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
++        device.executeShellCommand("am force-stop " + BROWSER_PACKAGE);
++        Context context = ApplicationProvider.getApplicationContext();
++        Intent launch = new Intent(Intent.ACTION_MAIN);
++        launch.setClassName(SHIM_PACKAGE,
++                "org.agent54.xenon.iwa.kitchensink.LauncherActivity");
++        launch.addCategory(Intent.CATEGORY_LAUNCHER);
++        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        context.startActivity(launch);
++
++        assertThat(device.wait(Until.hasObject(By.pkg(BROWSER_PACKAGE)), 20000)).isTrue();
++        assertThat(device.getCurrentPackageName()).isEqualTo(BROWSER_PACKAGE);
++        assertThat(device.wait(Until.hasObject(By.textContains("IWA Kitchen Sink")), 20000))
++                .isTrue();
++        String activities = device.executeShellCommand("dumpsys activity activities");
++        assertThat(activities).contains("WebappActivity");
++        assertThat(activities).contains(BROWSER_PACKAGE);
++    }
++
++    @Test
++    public void testObserverShutdownCancelsDetachedCallback() throws Exception {
++        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
++        // This APK is used only on the disposable lab emulator. Clear stale
++        // diagnostic markers before launching the browser-side shutdown probe.
++        device.executeShellCommand("logcat -c");
++        device.executeShellCommand("am force-stop " + BROWSER_PACKAGE);
++        Context context = ApplicationProvider.getApplicationContext();
++        Intent launch = new Intent(Intent.ACTION_MAIN);
++        launch.setClassName(SHIM_PACKAGE,
++                "org.agent54.xenon.iwa.kitchensink.LauncherActivity");
++        launch.addCategory(Intent.CATEGORY_LAUNCHER);
++        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        context.startActivity(launch);
++
++        String log = "";
++        for (int attempt = 0; attempt < 100; attempt++) {
++            log = device.executeShellCommand("logcat -d -v brief | grep XENON_IWA_MANAGER_");
++            if (log.contains("XENON_IWA_MANAGER_OBSERVER_SHUTDOWN")) break;
++            Thread.sleep(100);
++        }
++        assertThat(log).contains("XENON_IWA_MANAGER_OBSERVER_SHUTDOWN");
++        Thread.sleep(1000);
++        log = device.executeShellCommand("logcat -d -v brief | grep XENON_IWA_MANAGER_");
++        assertThat(log).doesNotContain("XENON_IWA_MANAGER_CALLBACK_AFTER_SHUTDOWN");
++        assertThat(device.executeShellCommand("pidof " + BROWSER_PACKAGE).trim()).isNotEmpty();
++    }
++
++    @Test
++    public void testCallerShutdownStopsRemainingCallbacks() throws Exception {
++        UiDevice device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation());
++        // This test is restricted to the disposable lab emulator.
++        device.executeShellCommand("logcat -c");
++        device.executeShellCommand("am force-stop " + BROWSER_PACKAGE);
++        Context context = ApplicationProvider.getApplicationContext();
++        Intent launch = new Intent(Intent.ACTION_MAIN);
++        launch.setClassName(SHIM_PACKAGE,
++                "org.agent54.xenon.iwa.kitchensink.LauncherActivity");
++        launch.addCategory(Intent.CATEGORY_LAUNCHER);
++        launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        context.startActivity(launch);
++
++        String log = "";
++        for (int attempt = 0; attempt < 100; attempt++) {
++            log = device.executeShellCommand("logcat -d -v brief | grep XENON_IWA_MANAGER_");
++            if (log.contains("XENON_IWA_MANAGER_CALLER_SHUTDOWN")
++                    || log.contains("XENON_IWA_MANAGER_CAPTURE_DESTRUCTOR_SHUTDOWN")) break;
++            Thread.sleep(100);
++        }
++        assertThat(log.contains("XENON_IWA_MANAGER_CALLER_SHUTDOWN")
++                || log.contains("XENON_IWA_MANAGER_CAPTURE_DESTRUCTOR_SHUTDOWN")).isTrue();
++        Thread.sleep(1000);
++        log = device.executeShellCommand("logcat -d -v brief | grep XENON_IWA_MANAGER_");
++        assertThat(log.contains("XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN"))
++                .isFalse();
++        assertThat(device.executeShellCommand("pidof " + BROWSER_PACKAGE).trim()).isNotEmpty();
++    }
++}

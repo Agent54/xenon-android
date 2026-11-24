@@ -1,0 +1,31 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -502,18 +502,19 @@ void IsolatedWebAppUpdateManager::PrioritizeUpdateAndWaitImpl(
+     const webapps::AppId& app_id,
+     base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)> callback) {
+-  bool task_has_started =
+-      task_queue_.EnsureQueuedUpdateApplyTaskHasStarted(app_id);
+-  if (task_has_started) {
+-    on_update_finished_callbacks_
+-        .try_emplace(app_id, std::make_unique<base::OnceCallbackList<void(
+-                                 IsolatedWebAppApplyUpdateCommandResult)>>())
+-        .first->second->AddUnsafe(std::move(callback));
+-  } else {
++  if (!task_queue_.IsUpdateApplyTaskQueued(app_id)) {
+     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+         FROM_HERE,
+         base::BindOnce(
+             std::move(callback),
+             base::unexpected(IsolatedWebAppApplyUpdateCommandError{
+                 .message = "Update is not currently being applied."})));
++    return;
+   }
++  on_update_finished_callbacks_
++      .try_emplace(app_id, std::make_unique<base::OnceCallbackList<void(
++                               IsolatedWebAppApplyUpdateCommandResult)>>())
++      .first->second->AddUnsafe(std::move(callback));
++  // Starting may synchronously complete the task and invoke the callback.
++  // Do not access members after this call.
++  task_queue_.EnsureQueuedUpdateApplyTaskHasStarted(app_id);
+ }

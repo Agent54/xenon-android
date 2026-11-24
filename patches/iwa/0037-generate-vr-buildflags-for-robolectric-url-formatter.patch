@@ -1,0 +1,12 @@
+diff --git a/components/url_formatter/BUILD.gn b/components/url_formatter/BUILD.gn
+--- a/components/url_formatter/BUILD.gn
++++ b/components/url_formatter/BUILD.gn
+@@ -47,5 +47,8 @@ static_library("url_formatter") {
+   if (is_robolectric) {
+     # Make jni.h available.
+     configs += [ "//third_party/jdk" ]
++    # url_formatter.cc includes content/public/common/url_constants.h, which
++    # needs this generated header in the Robolectric toolchain too.
++    deps += [ "//device/vr/buildflags" ]
+   }
+   if (is_android || is_robolectric) {

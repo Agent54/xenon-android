@@ -1,0 +1,388 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h
+index 4e6d167..32da21c 100644
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.h
+@@ -23,10 +23,9 @@ class IsolatedWebAppUpdateCallbackCoordinator {
+  public:
+   using ResultCallback =
+       base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)>;
+-  using IsQueuedCallback =
+-      base::RepeatingCallback<bool(const webapps::AppId&)>;
+-  using StartCallback =
+-      base::RepeatingCallback<void(const webapps::AppId&)>;
++  using IsQueuedCallback = base::RepeatingCallback<bool(const webapps::AppId&)>;
++  using StartCallback = base::RepeatingCallback<void(const webapps::AppId&)>;
++  using CallbackBatch = std::vector<ResultCallback>;
+ 
+   IsolatedWebAppUpdateCallbackCoordinator(IsQueuedCallback is_queued,
+                                           StartCallback start);
+@@ -38,13 +37,24 @@ class IsolatedWebAppUpdateCallbackCoordinator {
+       const IsolatedWebAppUpdateCallbackCoordinator&) = delete;
+ 
+   void PrioritizeAndWait(webapps::AppId app_id, ResultCallback callback);
++  // Detach before notifying observers so their reentrant registrations belong
++  // to the next completion, not the completion already in progress. The caller
++  // must weak-check this coordinator after observer notification and dispatch
++  // the batch through the same live coordinator.
++  CallbackBatch TakeBatch(const webapps::AppId& app_id);
++  void DispatchBatch(CallbackBatch callbacks,
++                     IsolatedWebAppApplyUpdateCommandResult result);
+   void Complete(webapps::AppId app_id,
+                 IsolatedWebAppApplyUpdateCommandResult result);
++  // Posted error callbacks for absent tasks or post-shutdown registrations
++  // outlive this object; their callers must guard their own lifetime.
++  void Shutdown();
+ 
+  private:
+   IsQueuedCallback is_queued_;
+   StartCallback start_;
+-  base::flat_map<webapps::AppId, std::vector<ResultCallback>> callbacks_;
++  base::flat_map<webapps::AppId, CallbackBatch> callbacks_;
++  bool shutdown_ = false;
+   base::WeakPtrFactory<IsolatedWebAppUpdateCallbackCoordinator> weak_factory_{
+       this};
+ };
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc
+index 04e14f5..2130399 100644
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator.cc
+@@ -23,7 +23,7 @@ IsolatedWebAppUpdateCallbackCoordinator::
+ void IsolatedWebAppUpdateCallbackCoordinator::PrioritizeAndWait(
+     webapps::AppId app_id,
+     ResultCallback callback) {
+-  if (!is_queued_.Run(app_id)) {
++  if (shutdown_ || !is_queued_.Run(app_id)) {
+     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
+         FROM_HERE,
+         base::BindOnce(
+@@ -40,23 +40,52 @@ void IsolatedWebAppUpdateCallbackCoordinator::PrioritizeAndWait(
+   start.Run(app_id);
+ }
+ 
+-void IsolatedWebAppUpdateCallbackCoordinator::Complete(
+-    webapps::AppId app_id,
+-    IsolatedWebAppApplyUpdateCommandResult result) {
++IsolatedWebAppUpdateCallbackCoordinator::CallbackBatch
++IsolatedWebAppUpdateCallbackCoordinator::TakeBatch(
++    const webapps::AppId& app_id) {
++  if (shutdown_) {
++    return {};
++  }
+   auto it = callbacks_.find(app_id);
+   if (it == callbacks_.end()) {
+-    return;
++    return {};
+   }
+-  std::vector<ResultCallback> callbacks = std::move(it->second);
++  CallbackBatch callbacks = std::move(it->second);
+   callbacks_.erase(it);
++  return callbacks;
++}
++
++void IsolatedWebAppUpdateCallbackCoordinator::DispatchBatch(
++    CallbackBatch callbacks,
++    IsolatedWebAppApplyUpdateCommandResult result) {
++  if (shutdown_) {
++    return;
++  }
+   base::WeakPtr<IsolatedWebAppUpdateCallbackCoordinator> weak_this =
+       weak_factory_.GetWeakPtr();
+   for (ResultCallback& callback : callbacks) {
+     std::move(callback).Run(result);
+-    if (!weak_this) {
++    if (!weak_this || weak_this->shutdown_) {
+       return;
+     }
+   }
+ }
+ 
++void IsolatedWebAppUpdateCallbackCoordinator::Complete(
++    webapps::AppId app_id,
++    IsolatedWebAppApplyUpdateCommandResult result) {
++  DispatchBatch(TakeBatch(app_id), std::move(result));
++}
++
++void IsolatedWebAppUpdateCallbackCoordinator::Shutdown() {
++  if (shutdown_) {
++    return;
++  }
++  shutdown_ = true;
++  weak_factory_.InvalidateWeakPtrs();
++  // Discard callbacks only after the member map is empty: destroying bound
++  // state may synchronously delete this coordinator.
++  auto callbacks_to_discard = std::move(callbacks_);
++}
++
+ }  // namespace web_app
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc
+index 1feb334..f4ffbe2 100644
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_callback_coordinator_unittest.cc
+@@ -7,6 +7,7 @@
+ #include <memory>
+ 
+ #include "base/functional/bind.h"
++#include "base/functional/callback_helpers.h"
+ #include "base/test/task_environment.h"
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+@@ -29,8 +30,7 @@ TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
+   int notification_count = 0;
+   coordinator->PrioritizeAndWait(
+       "app", base::BindOnce(
+-                 [](int* count,
+-                    IsolatedWebAppApplyUpdateCommandResult result) {
++                 [](int* count, IsolatedWebAppApplyUpdateCommandResult result) {
+                    EXPECT_TRUE(result.has_value());
+                    ++*count;
+                  },
+@@ -45,18 +45,18 @@ TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
+   int starts = 0;
+   IsolatedWebAppUpdateCallbackCoordinator coordinator(
+       base::BindRepeating([](const webapps::AppId&) { return false; }),
+-      base::BindRepeating(
+-          [](int* count, const webapps::AppId&) { ++*count; }, &starts));
++      base::BindRepeating([](int* count, const webapps::AppId&) { ++*count; },
++                          &starts));
+ 
+   int errors = 0;
+   coordinator.PrioritizeAndWait(
+-      "missing", base::BindOnce(
+-                     [](int* count,
+-                        IsolatedWebAppApplyUpdateCommandResult result) {
+-                       EXPECT_FALSE(result.has_value());
+-                       ++*count;
+-                     },
+-                     &errors));
++      "missing",
++      base::BindOnce(
++          [](int* count, IsolatedWebAppApplyUpdateCommandResult result) {
++            EXPECT_FALSE(result.has_value());
++            ++*count;
++          },
++          &errors));
+   EXPECT_EQ(errors, 0);
+   task_environment.RunUntilIdle();
+   EXPECT_EQ(errors, 1);
+@@ -72,21 +72,20 @@ TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
+   int first_calls = 0;
+   int second_calls = 0;
+   coordinator->PrioritizeAndWait(
+-      "app", base::BindOnce(
+-                 [](std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator>*
+-                        owner,
+-                    int* count, IsolatedWebAppApplyUpdateCommandResult result) {
+-                   EXPECT_TRUE(result.has_value());
+-                   ++*count;
+-                   owner->reset();
+-                 },
+-                 &coordinator, &first_calls));
++      "app",
++      base::BindOnce(
++          [](std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator>* owner,
++             int* count, IsolatedWebAppApplyUpdateCommandResult result) {
++            EXPECT_TRUE(result.has_value());
++            ++*count;
++            owner->reset();
++          },
++          &coordinator, &first_calls));
+   coordinator->PrioritizeAndWait(
+-      "app", base::BindOnce(
+-                 [](int* count, IsolatedWebAppApplyUpdateCommandResult) {
+-                   ++*count;
+-                 },
+-                 &second_calls));
++      "app",
++      base::BindOnce(
++          [](int* count, IsolatedWebAppApplyUpdateCommandResult) { ++*count; },
++          &second_calls));
+ 
+   coordinator->Complete("app", base::ok());
+   EXPECT_EQ(first_calls, 1);
+@@ -102,21 +101,21 @@ TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
+   int first_calls = 0;
+   int next_generation_calls = 0;
+   coordinator.PrioritizeAndWait(
+-      "app", base::BindOnce(
+-                 [](IsolatedWebAppUpdateCallbackCoordinator* owner,
+-                    int* first_count, int* next_count,
+-                    IsolatedWebAppApplyUpdateCommandResult result) {
+-                   EXPECT_TRUE(result.has_value());
+-                   ++*first_count;
+-                   owner->PrioritizeAndWait(
+-                       "app", base::BindOnce(
+-                                  [](int* count,
+-                                     IsolatedWebAppApplyUpdateCommandResult) {
+-                                    ++*count;
+-                                  },
+-                                  next_count));
+-                 },
+-                 &coordinator, &first_calls, &next_generation_calls));
++      "app",
++      base::BindOnce(
++          [](IsolatedWebAppUpdateCallbackCoordinator* owner, int* first_count,
++             int* next_count, IsolatedWebAppApplyUpdateCommandResult result) {
++            EXPECT_TRUE(result.has_value());
++            ++*first_count;
++            owner->PrioritizeAndWait(
++                "app",
++                base::BindOnce(
++                    [](int* count, IsolatedWebAppApplyUpdateCommandResult) {
++                      ++*count;
++                    },
++                    next_count));
++          },
++          &coordinator, &first_calls, &next_generation_calls));
+ 
+   coordinator.Complete("app", base::ok());
+   EXPECT_EQ(first_calls, 1);
+@@ -125,5 +124,149 @@ TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
+   EXPECT_EQ(next_generation_calls, 1);
+ }
+ 
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     SynchronousStartCompletionMayDestroyOwner) {
++  base::test::TaskEnvironment task_environment;
++  std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator> coordinator;
++  coordinator = std::make_unique<IsolatedWebAppUpdateCallbackCoordinator>(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating(
++          [](std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator>* owner,
++             const webapps::AppId& app_id) {
++            (*owner)->Complete(app_id, base::ok());
++          },
++          &coordinator));
++
++  int calls = 0;
++  coordinator->PrioritizeAndWait(
++      "app",
++      base::BindOnce(
++          [](std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator>* owner,
++             int* count, IsolatedWebAppApplyUpdateCommandResult result) {
++            EXPECT_TRUE(result.has_value());
++            ++*count;
++            owner->reset();
++          },
++          &coordinator, &calls));
++  EXPECT_EQ(calls, 1);
++  EXPECT_FALSE(coordinator);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     DetachedBatchExcludesObserverReentrantRegistration) {
++  base::test::TaskEnvironment task_environment;
++  IsolatedWebAppUpdateCallbackCoordinator coordinator(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating([](const webapps::AppId&) {}));
++  int old_calls = 0;
++  int new_calls = 0;
++  coordinator.PrioritizeAndWait(
++      "app",
++      base::BindOnce(
++          [](int* count, IsolatedWebAppApplyUpdateCommandResult) { ++*count; },
++          &old_calls));
++
++  auto completed_batch = coordinator.TakeBatch("app");
++  coordinator.PrioritizeAndWait(
++      "app",
++      base::BindOnce(
++          [](int* count, IsolatedWebAppApplyUpdateCommandResult) { ++*count; },
++          &new_calls));
++  coordinator.DispatchBatch(std::move(completed_batch), base::ok());
++  EXPECT_EQ(old_calls, 1);
++  EXPECT_EQ(new_calls, 0);
++  coordinator.Complete("app", base::ok());
++  EXPECT_EQ(new_calls, 1);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     ShutdownCancelsDetachedAndPendingCallbacks) {
++  base::test::TaskEnvironment task_environment;
++  IsolatedWebAppUpdateCallbackCoordinator coordinator(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating([](const webapps::AppId&) {}));
++  int calls = 0;
++  for (const char* app_id : {"detached", "pending"}) {
++    coordinator.PrioritizeAndWait(
++        app_id,
++        base::BindOnce([](int* count,
++                          IsolatedWebAppApplyUpdateCommandResult) { ++*count; },
++                       &calls));
++  }
++  auto detached = coordinator.TakeBatch("detached");
++  coordinator.Shutdown();
++  coordinator.DispatchBatch(std::move(detached), base::ok());
++  coordinator.Complete("pending", base::ok());
++  EXPECT_EQ(calls, 0);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     ShutdownDuringDispatchCancelsRemainingCallbacks) {
++  base::test::TaskEnvironment task_environment;
++  IsolatedWebAppUpdateCallbackCoordinator coordinator(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating([](const webapps::AppId&) {}));
++  int remaining_calls = 0;
++  coordinator.PrioritizeAndWait(
++      "app",
++      base::BindOnce(
++          [](IsolatedWebAppUpdateCallbackCoordinator* owner,
++             IsolatedWebAppApplyUpdateCommandResult) { owner->Shutdown(); },
++          &coordinator));
++  coordinator.PrioritizeAndWait(
++      "app",
++      base::BindOnce(
++          [](int* count, IsolatedWebAppApplyUpdateCommandResult) { ++*count; },
++          &remaining_calls));
++
++  coordinator.Complete("app", base::ok());
++  EXPECT_EQ(remaining_calls, 0);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     RegistrationAfterShutdownPostsErrorWithoutStarting) {
++  base::test::TaskEnvironment task_environment;
++  int starts = 0;
++  IsolatedWebAppUpdateCallbackCoordinator coordinator(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating([](int* count, const webapps::AppId&) { ++*count; },
++                          &starts));
++  coordinator.Shutdown();
++
++  int errors = 0;
++  coordinator.PrioritizeAndWait(
++      "app", base::BindOnce(
++                 [](int* count, IsolatedWebAppApplyUpdateCommandResult result) {
++                   EXPECT_FALSE(result.has_value());
++                   ++*count;
++                 },
++                 &errors));
++  EXPECT_EQ(errors, 0);
++  task_environment.RunUntilIdle();
++  EXPECT_EQ(errors, 1);
++  EXPECT_EQ(starts, 0);
++}
++
++TEST(IsolatedWebAppUpdateCallbackCoordinatorTest,
++     DiscardedCallbackMayDestroyOwnerDuringShutdown) {
++  base::test::TaskEnvironment task_environment;
++  auto coordinator = std::make_unique<IsolatedWebAppUpdateCallbackCoordinator>(
++      base::BindRepeating([](const webapps::AppId&) { return true; }),
++      base::BindRepeating([](const webapps::AppId&) {}));
++  base::ScopedClosureRunner on_discard(base::BindOnce(
++      [](std::unique_ptr<IsolatedWebAppUpdateCallbackCoordinator>* owner) {
++        owner->reset();
++      },
++      &coordinator));
++  coordinator->PrioritizeAndWait(
++      "app",
++      base::BindOnce([](base::ScopedClosureRunner,
++                        IsolatedWebAppApplyUpdateCommandResult) { FAIL(); },
++                     std::move(on_discard)));
++
++  coordinator->Shutdown();
++  EXPECT_FALSE(coordinator);
++}
++
+ }  // namespace
+ }  // namespace web_app

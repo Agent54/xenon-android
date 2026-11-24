@@ -1,0 +1,58 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.h
+@@ -8,5 +8,6 @@
+ #include <memory>
+ #include <optional>
++#include <vector>
+ 
+ #include "base/callback_list.h"
+ #include "base/cancelable_callback.h"
+@@ -405,8 +406,8 @@
+   // Callbacks that are run once an update apply task for a given app id has
+   // finished (successfully or unsuccessfully).
+   base::flat_map<webapps::AppId,
+-                 std::unique_ptr<base::OnceCallbackList<void(
+-                     IsolatedWebAppApplyUpdateCommandResult)>>>
++                 std::vector<base::OnceCallback<void(
++                     IsolatedWebAppApplyUpdateCommandResult)>>>
+       on_update_finished_callbacks_;
+ 
+   base::ScopedObservation<WebAppInstallManager, WebAppInstallManagerObserver>
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -514,9 +514,6 @@ void IsolatedWebAppUpdateManager::PrioritizeUpdateAndWaitImpl(
+     return;
+   }
+-  on_update_finished_callbacks_
+-      .try_emplace(app_id, std::make_unique<base::OnceCallbackList<void(
+-                               IsolatedWebAppApplyUpdateCommandResult)>>())
+-      .first->second->AddUnsafe(std::move(callback));
++  on_update_finished_callbacks_[app_id].push_back(std::move(callback));
+   // Starting may synchronously complete the task and invoke the callback.
+   // Do not access members after this call.
+   task_queue_.EnsureQueuedUpdateApplyTaskHasStarted(app_id);
+@@ -808,9 +805,8 @@ void IsolatedWebAppUpdateManager::OnUpdateApplyTaskCompleted(
+ 
+   const webapps::AppId app_id = task->url_info().app_id();
+   auto weak_this = weak_factory_.GetWeakPtr();
+-  std::unique_ptr<
+-      base::OnceCallbackList<void(IsolatedWebAppApplyUpdateCommandResult)>>
+-      callbacks;
++  std::vector<base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)>>
++      callbacks;
+   auto callbacks_it = on_update_finished_callbacks_.find(app_id);
+   if (callbacks_it != on_update_finished_callbacks_.end()) {
+     callbacks = std::move(callbacks_it->second);
+@@ -824,8 +819,8 @@ void IsolatedWebAppUpdateManager::OnUpdateApplyTaskCompleted(
+     }
+   }
+ 
+-  if (callbacks) {
+-    callbacks->Notify(status);
++  for (auto& callback : callbacks) {
++    std::move(callback).Run(status);
+     if (!weak_this) {
+       return;
+     }

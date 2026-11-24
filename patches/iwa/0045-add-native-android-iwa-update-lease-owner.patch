@@ -1,0 +1,327 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+index 3fbe732..ad85e4c 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+@@ -201,12 +201,25 @@ public class WebappActivity extends BaseCustomTabActivity {
+         return token;
+     }
+ 
++    @CalledByNative
++    private static @JniType("std::string") String tryAcquireIwaUpdateLeaseForNative(
++            @JniType("std::string") String appId) {
++        String token = tryAcquireIwaUpdateLease(appId);
++        return token == null ? "" : token;
++    }
++
+     /** Only the current owner may release an update lease. */
+     static void releaseIwaUpdateLease(String appId, String token) {
+         ThreadUtils.assertOnUiThread();
+         if (token.equals(sIwaUpdateLeases.get(appId))) sIwaUpdateLeases.remove(appId);
+     }
+ 
++    @CalledByNative
++    private static void releaseIwaUpdateLeaseForNative(
++            @JniType("std::string") String appId, @JniType("std::string") String token) {
++        releaseIwaUpdateLease(appId, token);
++    }
++
+     static boolean isIwaLaunchResolving(String token, String appId) {
+         ThreadUtils.assertOnUiThread();
+         IwaLaunchReservation reservation = sPendingIwaLaunches.get(token);
+diff --git a/chrome/browser/web_applications/BUILD.gn b/chrome/browser/web_applications/BUILD.gn
+index 5ef9bb6..ce19617 100644
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -1678,4 +1678,26 @@ if (is_desktop_android) {
+       "//testing/gtest",
+     ]
+   }
++
++  source_set("android_iwa_update_lease") {
++    sources = [
++      "android_iwa_update_lease.cc",
++      "android_iwa_update_lease.h",
++    ]
++    deps = [
++      "//base",
++      "//components/webapps/common",
++    ]
++  }
++
++  test("android_iwa_update_lease_unittests") {
++    sources = [ "android_iwa_update_lease_unittest.cc" ]
++    deps = [
++      ":android_iwa_update_lease",
++      "//base/test:run_all_unittests",
++      "//base/test:test_support",
++      "//testing/android/native_test:native_test_native_code",
++      "//testing/gtest",
++    ]
++  }
+ }
+diff --git a/chrome/browser/web_applications/android_iwa_update_lease.cc b/chrome/browser/web_applications/android_iwa_update_lease.cc
+new file mode 100644
+index 0000000..3d7a91c
+--- /dev/null
++++ b/chrome/browser/web_applications/android_iwa_update_lease.cc
+@@ -0,0 +1,49 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/android_iwa_update_lease.h"
++
++#include <memory>
++#include <string>
++#include <utility>
++
++namespace web_app {
++
++// static
++std::unique_ptr<AndroidIwaUpdateLease> AndroidIwaUpdateLease::TryAcquire(
++    webapps::AppId app_id,
++    AcquireCallback acquire_callback,
++    ReleaseCallback release_callback) {
++  std::string token = acquire_callback.Run(app_id);
++  if (token.empty()) {
++    return nullptr;
++  }
++  return std::unique_ptr<AndroidIwaUpdateLease>(new AndroidIwaUpdateLease(
++      std::move(app_id), std::move(token), std::move(release_callback)));
++}
++
++AndroidIwaUpdateLease::AndroidIwaUpdateLease(webapps::AppId app_id,
++                                             std::string token,
++                                             ReleaseCallback release_callback)
++    : app_id_(std::move(app_id)),
++      token_(std::move(token)),
++      release_callback_(std::move(release_callback)) {}
++
++AndroidIwaUpdateLease::~AndroidIwaUpdateLease() {
++  Release();
++}
++
++void AndroidIwaUpdateLease::Release() {
++  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
++  if (token_.empty()) {
++    return;
++  }
++  std::string token = std::exchange(token_, {});
++  webapps::AppId app_id = app_id_;
++  ReleaseCallback release_callback = release_callback_;
++  // The callback may destroy this object. Do not touch members afterwards.
++  release_callback.Run(app_id, token);
++}
++
++}  // namespace web_app
+diff --git a/chrome/browser/web_applications/android_iwa_update_lease.h b/chrome/browser/web_applications/android_iwa_update_lease.h
+new file mode 100644
+index 0000000..7bf52d0
+--- /dev/null
++++ b/chrome/browser/web_applications/android_iwa_update_lease.h
+@@ -0,0 +1,50 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_WEB_APPLICATIONS_ANDROID_IWA_UPDATE_LEASE_H_
++#define CHROME_BROWSER_WEB_APPLICATIONS_ANDROID_IWA_UPDATE_LEASE_H_
++
++#include <memory>
++#include <string>
++
++#include "base/functional/callback.h"
++#include "base/sequence_checker.h"
++#include "components/webapps/common/web_app_id.h"
++
++namespace web_app {
++
++// Owns a Java app-ID update lease until command completion or destruction.
++// Callers must stay on the UI sequence. An empty acquisition token means busy.
++class AndroidIwaUpdateLease {
++ public:
++  using AcquireCallback =
++      base::RepeatingCallback<std::string(const webapps::AppId&)>;
++  using ReleaseCallback =
++      base::RepeatingCallback<void(const webapps::AppId&, const std::string&)>;
++
++  static std::unique_ptr<AndroidIwaUpdateLease> TryAcquire(
++      webapps::AppId app_id,
++      AcquireCallback acquire_callback,
++      ReleaseCallback release_callback);
++  AndroidIwaUpdateLease(const AndroidIwaUpdateLease&) = delete;
++  AndroidIwaUpdateLease& operator=(const AndroidIwaUpdateLease&) = delete;
++  ~AndroidIwaUpdateLease();
++
++  // Idempotent. Clears native ownership before calling Java, which may reenter.
++  void Release();
++
++ private:
++  AndroidIwaUpdateLease(webapps::AppId app_id,
++                        std::string token,
++                        ReleaseCallback release_callback);
++
++  webapps::AppId app_id_;
++  std::string token_;
++  ReleaseCallback release_callback_;
++  SEQUENCE_CHECKER(sequence_checker_);
++};
++
++}  // namespace web_app
++
++#endif  // CHROME_BROWSER_WEB_APPLICATIONS_ANDROID_IWA_UPDATE_LEASE_H_
+diff --git a/chrome/browser/web_applications/android_iwa_update_lease_unittest.cc b/chrome/browser/web_applications/android_iwa_update_lease_unittest.cc
+new file mode 100644
+index 0000000..a6a1736
+--- /dev/null
++++ b/chrome/browser/web_applications/android_iwa_update_lease_unittest.cc
+@@ -0,0 +1,149 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/android_iwa_update_lease.h"
++
++#include <map>
++#include <memory>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/bind.h"
++#include "testing/gtest/include/gtest/gtest.h"
++
++namespace web_app {
++namespace {
++
++constexpr char kAppId[] = "idgjjoiemckfcohgjoaafbninphmambh";
++
++TEST(AndroidIwaUpdateLeaseTest, DenialDoesNotCreateOwnerOrRelease) {
++  int releases = 0;
++  auto lease = AndroidIwaUpdateLease::TryAcquire(
++      kAppId,
++      base::BindRepeating([](const webapps::AppId&) { return std::string(); }),
++      base::BindRepeating([](int* releases, const webapps::AppId&,
++                             const std::string&) { ++*releases; },
++                          &releases));
++  EXPECT_FALSE(lease);
++  EXPECT_EQ(0, releases);
++}
++
++TEST(AndroidIwaUpdateLeaseTest,
++     ExplicitReleaseIsIdempotentAndDestructorDoesNotRepeat) {
++  std::vector<std::pair<std::string, std::string>> released;
++  auto lease = AndroidIwaUpdateLease::TryAcquire(
++      kAppId, base::BindRepeating([](const webapps::AppId&) {
++        return std::string("owner-token");
++      }),
++      base::BindRepeating(
++          [](std::vector<std::pair<std::string, std::string>>* released,
++             const webapps::AppId& app_id, const std::string& token) {
++            released->emplace_back(app_id, token);
++          },
++          &released));
++  ASSERT_TRUE(lease);
++  lease->Release();
++  lease->Release();
++  lease.reset();
++  EXPECT_EQ((std::vector<std::pair<std::string, std::string>>{
++                {kAppId, "owner-token"}}),
++            released);
++}
++
++TEST(AndroidIwaUpdateLeaseTest, DestructorReleasesExactAppAndToken) {
++  std::vector<std::pair<std::string, std::string>> released;
++  auto lease = AndroidIwaUpdateLease::TryAcquire(
++      kAppId, base::BindRepeating([](const webapps::AppId&) {
++        return std::string("owner-token");
++      }),
++      base::BindRepeating(
++          [](std::vector<std::pair<std::string, std::string>>* released,
++             const webapps::AppId& app_id, const std::string& token) {
++            released->emplace_back(app_id, token);
++          },
++          &released));
++  ASSERT_TRUE(lease);
++  lease.reset();
++  EXPECT_EQ((std::vector<std::pair<std::string, std::string>>{
++                {kAppId, "owner-token"}}),
++            released);
++}
++
++TEST(AndroidIwaUpdateLeaseTest, AcquisitionCopiesAppIdBeforeCallback) {
++  webapps::AppId app_id = kAppId;
++  std::string released_app_id;
++  auto lease = AndroidIwaUpdateLease::TryAcquire(
++      app_id,
++      base::BindRepeating(
++          [](webapps::AppId* source, const webapps::AppId& incoming) {
++            EXPECT_EQ(kAppId, incoming);
++            *source = "changed-by-callback";
++            return std::string("owner-token");
++          },
++          &app_id),
++      base::BindRepeating(
++          [](std::string* released_app_id, const webapps::AppId& app_id,
++             const std::string&) { *released_app_id = app_id; },
++          &released_app_id));
++  ASSERT_TRUE(lease);
++  lease.reset();
++  EXPECT_EQ(kAppId, released_app_id);
++}
++
++TEST(AndroidIwaUpdateLeaseTest, DistinctAppsHaveIndependentOwners) {
++  std::map<std::string, std::string> held;
++  auto acquire = base::BindRepeating(
++      [](std::map<std::string, std::string>* held,
++         const webapps::AppId& app_id) {
++        if (held->contains(app_id)) {
++          return std::string();
++        }
++        return held->emplace(app_id, app_id + "-token").first->second;
++      },
++      &held);
++  auto release = base::BindRepeating(
++      [](std::map<std::string, std::string>* held, const webapps::AppId& app_id,
++         const std::string& token) {
++        if (held->at(app_id) == token) {
++          held->erase(app_id);
++        }
++      },
++      &held);
++  auto first = AndroidIwaUpdateLease::TryAcquire(kAppId, acquire, release);
++  auto denied = AndroidIwaUpdateLease::TryAcquire(kAppId, acquire, release);
++  auto other =
++      AndroidIwaUpdateLease::TryAcquire("another-app", acquire, release);
++  EXPECT_TRUE(first);
++  EXPECT_FALSE(denied);
++  EXPECT_TRUE(other);
++  first.reset();
++  EXPECT_FALSE(held.contains(kAppId));
++  EXPECT_TRUE(held.contains("another-app"));
++  other.reset();
++  EXPECT_TRUE(held.empty());
++}
++
++TEST(AndroidIwaUpdateLeaseTest, ReleaseCanReenterDestructorSafely) {
++  std::unique_ptr<AndroidIwaUpdateLease> lease;
++  int releases = 0;
++  lease = AndroidIwaUpdateLease::TryAcquire(
++      kAppId, base::BindRepeating([](const webapps::AppId&) {
++        return std::string("owner-token");
++      }),
++      base::BindRepeating(
++          [](std::unique_ptr<AndroidIwaUpdateLease>* owner, int* releases,
++             const webapps::AppId&, const std::string&) {
++            ++*releases;
++            owner->reset();
++          },
++          &lease, &releases));
++  ASSERT_TRUE(lease);
++  lease->Release();
++  EXPECT_FALSE(lease);
++  EXPECT_EQ(1, releases);
++}
++
++}  // namespace
++}  // namespace web_app

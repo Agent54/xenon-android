@@ -1,0 +1,255 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
+index f93277a..ecb307f 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
+@@ -72,7 +72,14 @@ public class IwaLauncherActivity extends Activity {
+             }
+             mLaunchToken = savedToken;
+         }
+-        if (mLaunchToken == null) mLaunchToken = WebappActivity.reserveIwaLaunch(appId);
++        if (mLaunchToken == null) {
++            mLaunchToken = WebappActivity.reserveIwaLaunch(appId);
++            if (mLaunchToken == null) {
++                Log.i(TAG, "IWA launch blocked while an update holds the app lease");
++                finish();
++                return;
++            }
++        }
+ 
+         ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
+         Profile profile = ProfileManager.getLastUsedRegularProfile();
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+index c57f533..3fbe732 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+@@ -75,6 +75,7 @@ public class WebappActivity extends BaseCustomTabActivity {
+     private static final Map<String, IwaLaunchReservation> sPendingIwaLaunches = new HashMap<>();
+     private static final Map<String, String> sRecreatingIwaActivities = new HashMap<>();
+     private static final Map<String, IwaCloseWaiter> sIwaCloseWaiters = new LinkedHashMap<>();
++    private static final Map<String, String> sIwaUpdateLeases = new HashMap<>();
+     private static final ApplicationStatus.ActivityStateListener sIwaLaunchListener =
+             (activity, newState) -> {
+                 if (newState == ActivityState.CREATED && activity instanceof WebappActivity) {
+@@ -180,14 +181,32 @@ public class WebappActivity extends BaseCustomTabActivity {
+     }
+ 
+     /** Holds a launch across registry resolution and Android activity handoff. */
+-    static String reserveIwaLaunch(String appId) {
++    static @Nullable String reserveIwaLaunch(String appId) {
+         ThreadUtils.assertOnUiThread();
++        if (sIwaUpdateLeases.containsKey(appId)) return null;
+         ensureIwaWindowListener();
+         String token = UUID.randomUUID().toString();
+         sPendingIwaLaunches.put(token, new IwaLaunchReservation(appId));
+         return token;
+     }
+ 
++    /** Atomically excludes new launches while an update owns a quiescent app. */
++    static @Nullable String tryAcquireIwaUpdateLease(String appId) {
++        ThreadUtils.assertOnUiThread();
++        if (sIwaUpdateLeases.containsKey(appId) || getNumIwaWindowsForApp(appId) != 0) {
++            return null;
++        }
++        String token = UUID.randomUUID().toString();
++        sIwaUpdateLeases.put(appId, token);
++        return token;
++    }
++
++    /** Only the current owner may release an update lease. */
++    static void releaseIwaUpdateLease(String appId, String token) {
++        ThreadUtils.assertOnUiThread();
++        if (token.equals(sIwaUpdateLeases.get(appId))) sIwaUpdateLeases.remove(appId);
++    }
++
+     static boolean isIwaLaunchResolving(String token, String appId) {
+         ThreadUtils.assertOnUiThread();
+         IwaLaunchReservation reservation = sPendingIwaLaunches.get(token);
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+index 6ec4443..bbe0fb7 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.webapps;
+ import static org.junit.Assert.assertEquals;
+ import static org.junit.Assert.assertFalse;
+ import static org.junit.Assert.assertNotNull;
++import static org.junit.Assert.assertNull;
+ import static org.junit.Assert.assertTrue;
+ 
+ import android.app.Activity;
+@@ -18,6 +19,9 @@ import androidx.browser.customtabs.CustomTabsIntent;
+ 
+ import org.junit.Test;
+ import org.junit.runner.RunWith;
++import org.robolectric.Robolectric;
++import org.robolectric.Shadows;
++import org.robolectric.android.controller.ActivityController;
+ import org.robolectric.annotation.Config;
+ 
+ import org.chromium.base.ActivityState;
+@@ -27,6 +31,7 @@ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.base.test.util.Features;
+ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+ import org.chromium.chrome.browser.flags.ChromeFeatureList;
++import org.chromium.chrome.browser.firstrun.FirstRunStatus;
+ import org.chromium.components.webapk.lib.client.WebApkValidator;
+ import org.chromium.components.webapk.lib.common.WebApkMetaDataKeys;
+ import org.chromium.webapk.test.WebApkTestHelper;
+@@ -373,6 +378,158 @@ public class WebappActivityTest {
+         assertEquals(0, first.destroyCount);
+     }
+ 
++    @Test
++    public void updateLeaseBlocksOnlyMatchingAppLaunch() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String lease = WebappActivity.tryAcquireIwaUpdateLease(appId);
++        assertNotNull(lease);
++        try {
++            assertNull(WebappActivity.reserveIwaLaunch(appId));
++            assertNull(WebappActivity.tryAcquireIwaUpdateLease(appId));
++            String otherLaunch = WebappActivity.reserveIwaLaunch("another-app");
++            assertNotNull(otherLaunch);
++            WebappActivity.releaseIwaLaunch(otherLaunch);
++            WebappActivity.releaseIwaUpdateLease("another-app", lease);
++            assertNull(WebappActivity.reserveIwaLaunch(appId));
++            WebappActivity.releaseIwaUpdateLease(appId, "stale-token");
++            assertNull(WebappActivity.reserveIwaLaunch(appId));
++        } finally {
++            WebappActivity.releaseIwaUpdateLease(appId, lease);
++        }
++        String afterRelease = WebappActivity.reserveIwaLaunch(appId);
++        assertNotNull(afterRelease);
++        WebappActivity.releaseIwaLaunch(afterRelease);
++    }
++
++    @Test
++    public void updateLeaseWaitsForPendingHandoffAndRecreation() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String launch = WebappActivity.reserveIwaLaunch(appId);
++        assertNotNull(launch);
++        try {
++            assertNull(WebappActivity.tryAcquireIwaUpdateLease(appId));
++            assertTrue(WebappActivity.markIwaLaunchHandedOff(launch, appId));
++            assertNull(WebappActivity.tryAcquireIwaUpdateLease(appId));
++        } finally {
++            WebappActivity.releaseIwaLaunch(launch);
++        }
++
++        String recreation = "lease-recreation";
++        WebappActivity.reserveIwaRecreation(recreation, appId);
++        try {
++            assertNull(WebappActivity.tryAcquireIwaUpdateLease(appId));
++        } finally {
++            WebappActivity.consumeIwaRecreation(recreation, appId);
++        }
++        String lease = WebappActivity.tryAcquireIwaUpdateLease(appId);
++        assertNotNull(lease);
++        WebappActivity.releaseIwaUpdateLease(appId, lease);
++    }
++
++    @Test
++    public void updateLeaseWaitsForStoppedOrFinishingActivityUntilDestroyed() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        TestWebappActivity activity = new TestWebappActivity();
++        activity.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId));
++        ApplicationStatus.onStateChangeForTesting(activity, ActivityState.CREATED);
++        try {
++            ApplicationStatus.onStateChangeForTesting(activity, ActivityState.STOPPED);
++            assertNull(WebappActivity.tryAcquireIwaUpdateLease(appId));
++            activity.finish();
++            assertNull(WebappActivity.tryAcquireIwaUpdateLease(appId));
++        } finally {
++            ApplicationStatus.onStateChangeForTesting(activity, ActivityState.DESTROYED);
++        }
++        String lease = WebappActivity.tryAcquireIwaUpdateLease(appId);
++        assertNotNull(lease);
++        WebappActivity.releaseIwaUpdateLease(appId, lease);
++    }
++
++    @Test
++    public void staleUpdateLeaseTokenCannotReleaseNewOwner() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String first = WebappActivity.tryAcquireIwaUpdateLease(appId);
++        assertNotNull(first);
++        WebappActivity.releaseIwaUpdateLease(appId, first);
++        String second = WebappActivity.tryAcquireIwaUpdateLease(appId);
++        assertNotNull(second);
++        assertFalse(first.equals(second));
++        WebappActivity.releaseIwaUpdateLease(appId, first);
++        try {
++            assertNull(WebappActivity.reserveIwaLaunch(appId));
++        } finally {
++            WebappActivity.releaseIwaUpdateLease(appId, second);
++        }
++        WebappActivity.releaseIwaUpdateLease(appId, second);
++        String launch = WebappActivity.reserveIwaLaunch(appId);
++        assertNotNull(launch);
++        WebappActivity.releaseIwaLaunch(launch);
++    }
++
++    @Test
++    public void closeCallbackCanAcquireLeaseBeforeLaterLaunchReservation() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String launch = WebappActivity.reserveIwaLaunch(appId);
++        assertNotNull(launch);
++        String[] lease = new String[1];
++        String[] laterLaunch = new String[1];
++        TestOnceRunnable first =
++                new TestOnceRunnable() {
++                    @Override
++                    public void run() {
++                        super.run();
++                        lease[0] = WebappActivity.tryAcquireIwaUpdateLease(appId);
++                    }
++                };
++        TestOnceRunnable second =
++                new TestOnceRunnable() {
++                    @Override
++                    public void run() {
++                        super.run();
++                        laterLaunch[0] = WebappActivity.reserveIwaLaunch(appId);
++                    }
++                };
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, first);
++        WebappActivity.notifyOnAllIwaWindowsClosed(appId, second);
++        try {
++            WebappActivity.releaseIwaLaunch(launch);
++            assertNotNull(lease[0]);
++            assertEquals(1, first.runCount);
++            assertEquals(1, second.runCount);
++            assertNull(laterLaunch[0]);
++        } finally {
++            if (lease[0] != null) WebappActivity.releaseIwaUpdateLease(appId, lease[0]);
++            if (laterLaunch[0] != null) WebappActivity.releaseIwaLaunch(laterLaunch[0]);
++        }
++    }
++
++    @Test
++    public void appOwnedLauncherRejectsHeldLeaseBeforeBrowserStartup() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        boolean previousFirstRun = FirstRunStatus.getFirstRunFlowComplete();
++        FirstRunStatus.setFirstRunFlowComplete(true);
++        String lease = WebappActivity.tryAcquireIwaUpdateLease(appId);
++        assertNotNull(lease);
++        try {
++            Intent intent =
++                    new Intent(IwaLauncherActivity.ACTION_LAUNCH_IWA)
++                            .putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId);
++            ActivityController<IwaLauncherActivity> controller =
++                    Robolectric.buildActivity(IwaLauncherActivity.class, intent).create();
++            try {
++                IwaLauncherActivity activity = controller.get();
++                assertTrue(activity.isFinishing());
++                assertNull(Shadows.shadowOf(activity).getNextStartedActivity());
++                assertEquals(0, WebappActivity.getNumIwaWindowsForApp(appId));
++            } finally {
++                controller.destroy();
++            }
++        } finally {
++            WebappActivity.releaseIwaUpdateLease(appId, lease);
++            FirstRunStatus.setFirstRunFlowComplete(previousFirstRun);
++        }
++    }
++
+     private static class TestOnceRunnable implements JniOnceRunnable {
+         int runCount;
+         int destroyCount;

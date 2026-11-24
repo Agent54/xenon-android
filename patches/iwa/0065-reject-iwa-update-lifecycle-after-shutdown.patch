@@ -1,0 +1,42 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -374,6 +374,9 @@
+ 
+ void IsolatedWebAppUpdateManager::Start() {
+   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (has_shutdown_) {
++    return;
++  }
+   if (!content::AreIsolatedWebAppsEnabled(&*profile_)) {
+     return;
+   }
+@@ -438,6 +441,9 @@
+ }
+ 
+ void IsolatedWebAppUpdateManager::DelayedStart() {
++  if (has_shutdown_) {
++    return;
++  }
+   // Kick-off task processing. The task queue can already contain
+   // `IsolatedWebAppUpdateApplyTask`s for updates that are pending from the last
+   // browser session and were created in `IsolatedWebAppUpdateManager::Start`.
+@@ -531,12 +537,18 @@
+ 
+ void IsolatedWebAppUpdateManager::OnWebAppInstalled(
+     const webapps::AppId& app_id) {
++  if (has_shutdown_) {
++    return;
++  }
+   MaybeScheduleUpdateDiscoveryCheck();
+ }
+ 
+ void IsolatedWebAppUpdateManager::OnWebAppUninstalled(
+     const webapps::AppId& app_id,
+     webapps::WebappUninstallSource uninstall_source) {
++  if (has_shutdown_) {
++    return;
++  }
+   update_apply_waiters_.erase(app_id);
+   task_queue_.ClearNonStartedTasksOfApp(app_id);
+   MaybeResetScheduledUpdateDiscoveryCheck();

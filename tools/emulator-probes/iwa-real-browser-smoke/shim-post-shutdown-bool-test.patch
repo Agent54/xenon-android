@@ -1,0 +1,14 @@
+diff --git a/chrome/android/javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java b/chrome/android/javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java
+--- a/chrome/android/javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java
++++ b/chrome/android/javatests/src/org/chromium/chrome/test/smoke/XenonIwaShimSmokeTest.java
+@@ -97,6 +97,10 @@ public class XenonIwaShimSmokeTest {
+         Thread.sleep(1000);
+         log = device.executeShellCommand("logcat -d -v brief | grep XENON_IWA_MANAGER_");
+         assertThat(log.contains("XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN"))
+                 .isFalse();
++        assertThat(log.contains("XENON_IWA_MANAGER_BOOL_CALL_ENTERED")).isTrue();
++        assertThat(log.contains("XENON_IWA_MANAGER_BOOL_RETURNED_0_0")).isTrue();
++        assertThat(log.contains("XENON_IWA_MANAGER_DISCOVER_LOOKUP_REACHED")).isFalse();
++        assertThat(log.contains("XENON_IWA_MANAGER_PREPARE_LOOKUP_REACHED")).isFalse();
+         assertThat(device.executeShellCommand("pidof " + BROWSER_PACKAGE).trim()).isNotEmpty();
+     }

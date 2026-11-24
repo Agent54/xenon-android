@@ -1,0 +1,40 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -455,11 +455,21 @@ void IsolatedWebAppUpdateManager::Start() {
+       auto& callbacks = on_update_finished_callbacks_[url_info->app_id()];
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppUpdateManager* manager,
++             IsolatedWebAppUrlInfo url_info,
+              IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_CALLER_SHUTDOWN";
+             manager->Shutdown();
++            if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++                    "xenon-test-iwa-post-shutdown-single")) {
++              LOG(ERROR) << "XENON_IWA_MANAGER_SINGLE_CALL_ENTERED";
++              manager->DiscoverAndPrepareUpdate(
++                  url_info, GURL("https://example.invalid/update.json"),
++                  UpdateChannel::default_channel(), false, std::nullopt,
++                  false);
++              LOG(ERROR) << "XENON_IWA_MANAGER_SINGLE_CALL_RETURNED";
++            }
+           },
+-          base::Unretained(this)));
++          base::Unretained(this), *url_info));
+       callbacks.push_back(base::BindOnce(
+           [](IsolatedWebAppApplyUpdateCommandResult) {
+             LOG(ERROR) << "XENON_IWA_MANAGER_SECOND_CALLBACK_AFTER_SHUTDOWN";
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -601,3 +601,10 @@ void IsolatedWebAppUpdateManager::DiscoverAndPrepareUpdate(
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
++          "xenon-test-iwa-post-shutdown-single")) {
++    LOG(ERROR) << "XENON_IWA_MANAGER_SINGLE_WOULD_PUSH";
++    return;
++  }
++#endif
+   task_queue_.Push(std::make_unique<IsolatedWebAppUpdateCheckAndPrepareTask>(
+       IwaUpdateCheckAndPrepareTaskParams(update_manifest_url, update_channel,
+                                          allow_downgrades, pinned_version,

@@ -1,0 +1,13 @@
+diff --git a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+--- a/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/update/isolated_web_app_update_manager.cc
+@@ -609,5 +609,9 @@ void IsolatedWebAppUpdateManager::DiscoverAndPrepareUpdate(
+     const std::optional<IwaVersion>& pinned_version,
+     bool dev_mode) {
++  if (has_shutdown_) {
++    return;
++  }
++
+   task_queue_.Push(std::make_unique<IsolatedWebAppUpdateCheckAndPrepareTask>(
+       IwaUpdateCheckAndPrepareTaskParams(update_manifest_url, update_channel,
+                                          allow_downgrades, pinned_version,

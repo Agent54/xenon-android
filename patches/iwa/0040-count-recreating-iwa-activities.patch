@@ -1,0 +1,185 @@
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+@@ -167,3 +167,48 @@
+     }
+ 
++    @Test
++    public void iwaRecreationReservationSpansDestroyAndCreate() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        String token = "recreating-instance";
++        TestWebappActivity oldActivity = new TestWebappActivity();
++        oldActivity.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId));
++        ApplicationStatus.onStateChangeForTesting(oldActivity, ActivityState.CREATED);
++        boolean oldDestroyed = false;
++        try {
++            WebappActivity.reserveIwaRecreation(token, appId);
++            assertEquals(2, WebappActivity.getNumIwaWindowsForApp(appId));
++            ApplicationStatus.onStateChangeForTesting(oldActivity, ActivityState.DESTROYED);
++            oldDestroyed = true;
++            assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++
++            Bundle savedState = new Bundle();
++            savedState.putString(WebappActivity.STATE_IWA_RECREATION_TOKEN, token);
++            TestWebappActivity wrongApp = new TestWebappActivity();
++            wrongApp.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, "other-app"));
++            wrongApp.transformSavedInstanceStateForOnCreate(savedState);
++            ApplicationStatus.onStateChangeForTesting(wrongApp, ActivityState.CREATED);
++            try {
++                assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++            } finally {
++                ApplicationStatus.onStateChangeForTesting(wrongApp, ActivityState.DESTROYED);
++            }
++
++            TestWebappActivity replacement = new TestWebappActivity();
++            replacement.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId));
++            replacement.transformSavedInstanceStateForOnCreate(savedState);
++            ApplicationStatus.onStateChangeForTesting(replacement, ActivityState.CREATED);
++            try {
++                assertEquals(1, WebappActivity.getNumIwaWindowsForApp(appId));
++            } finally {
++                ApplicationStatus.onStateChangeForTesting(replacement, ActivityState.DESTROYED);
++            }
++            assertEquals(0, WebappActivity.getNumIwaWindowsForApp(appId));
++        } finally {
++            if (!oldDestroyed) {
++                ApplicationStatus.onStateChangeForTesting(oldActivity, ActivityState.DESTROYED);
++            }
++            WebappActivity.consumeIwaRecreation(token, appId);
++        }
++    }
++
+     private static class TestWebappActivity extends WebappActivity {
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+@@ -48,29 +48,40 @@
+     /** Opaque token carried only by the private activity handoff. */
+     static final String EXTRA_IWA_LAUNCH_TOKEN = "org.agent54.xenon.iwa.LAUNCH_TOKEN";
++    static final String STATE_IWA_RECREATION_TOKEN = "iwa_recreation_token";
+ 
+     private static final class IwaLaunchReservation {
+         final String appId;
+         boolean handedOff;
+ 
+         IwaLaunchReservation(String appId) {
+             this.appId = appId;
+         }
+     }
+ 
+     private static final Map<String, IwaLaunchReservation> sPendingIwaLaunches = new HashMap<>();
++    private static final Map<String, String> sRecreatingIwaActivities = new HashMap<>();
+     private static final ApplicationStatus.ActivityStateListener sIwaLaunchListener =
+             (activity, newState) -> {
+                 if (newState == ActivityState.CREATED && activity instanceof WebappActivity) {
+                     consumeIwaLaunch(activity, activity.getIntent());
++                    WebappActivity webappActivity = (WebappActivity) activity;
++                    String token = webappActivity.mIwaRecreationToken;
++                    String appId = webappActivity.getIwaAppId();
++                    if (token != null && appId != null) consumeIwaRecreation(token, appId);
+                 }
+             };
+ 
++    private @Nullable String mIwaRecreationToken;
++
+     /** Counts non-destroyed IWA document activities, including backgrounded ones. */
+     @CalledByNative
+     static int getNumIwaWindowsForApp(@JniType("std::string") String appId) {
+         ThreadUtils.assertOnUiThread();
+         int count = 0;
+         for (IwaLaunchReservation reservation : sPendingIwaLaunches.values()) {
+             if (appId.equals(reservation.appId)) count++;
+         }
++        for (String recreatingAppId : sRecreatingIwaActivities.values()) {
++            if (appId.equals(recreatingAppId)) count++;
++        }
+         for (Activity activity : ApplicationStatus.getRunningActivities()) {
+@@ -104,9 +115,7 @@
+     /** Holds a launch across registry resolution and Android activity handoff. */
+     static String reserveIwaLaunch(String appId) {
+         ThreadUtils.assertOnUiThread();
+-        if (sPendingIwaLaunches.isEmpty()) {
+-            ApplicationStatus.registerStateListenerForAllActivities(sIwaLaunchListener);
+-        }
++        ensureIwaWindowListener();
+         String token = UUID.randomUUID().toString();
+         sPendingIwaLaunches.put(token, new IwaLaunchReservation(appId));
+         return token;
+@@ -137,6 +146,31 @@
+     static void releaseIwaLaunch(String token) {
+         ThreadUtils.assertOnUiThread();
+-        if (sPendingIwaLaunches.remove(token) != null && sPendingIwaLaunches.isEmpty()) {
++        if (sPendingIwaLaunches.remove(token) != null) maybeUnregisterIwaWindowListener();
++    }
++
++    /** Keeps an IWA counted between the old activity's destruction and replacement creation. */
++    static void reserveIwaRecreation(String token, String appId) {
++        ThreadUtils.assertOnUiThread();
++        ensureIwaWindowListener();
++        sRecreatingIwaActivities.putIfAbsent(token, appId);
++    }
++
++    static boolean consumeIwaRecreation(String token, String appId) {
++        ThreadUtils.assertOnUiThread();
++        if (!appId.equals(sRecreatingIwaActivities.get(token))) return false;
++        sRecreatingIwaActivities.remove(token);
++        maybeUnregisterIwaWindowListener();
++        return true;
++    }
++
++    private static void ensureIwaWindowListener() {
++        if (sPendingIwaLaunches.isEmpty() && sRecreatingIwaActivities.isEmpty()) {
++            ApplicationStatus.registerStateListenerForAllActivities(sIwaLaunchListener);
++        }
++    }
++
++    private static void maybeUnregisterIwaWindowListener() {
++        if (sPendingIwaLaunches.isEmpty() && sRecreatingIwaActivities.isEmpty()) {
+             ApplicationStatus.unregisterActivityStateListener(sIwaLaunchListener);
+         }
+     }
+@@ -161,7 +195,44 @@
+     @Override
+     public void onNewIntent(Intent intent) {
+         super.onNewIntent(intent);
+         consumeIwaLaunch(this, intent);
+     }
+ 
++    private @Nullable String getIwaAppId() {
++        Intent intent = getIntent();
++        return intent == null
++                ? null
++                : IntentUtils.safeGetStringExtra(intent, IwaLauncherActivity.EXTRA_APP_ID);
++    }
++
++    @Override
++    protected @Nullable Bundle transformSavedInstanceStateForOnCreate(
++            @Nullable Bundle savedInstanceState) {
++        if (getIwaAppId() != null) {
++            String savedToken =
++                    savedInstanceState == null
++                            ? null
++                            : savedInstanceState.getString(STATE_IWA_RECREATION_TOKEN);
++            mIwaRecreationToken = savedToken == null ? UUID.randomUUID().toString() : savedToken;
++        }
++        return super.transformSavedInstanceStateForOnCreate(savedInstanceState);
++    }
++
++    @Override
++    public void onSaveInstanceState(Bundle outState) {
++        if (mIwaRecreationToken != null) {
++            outState.putString(STATE_IWA_RECREATION_TOKEN, mIwaRecreationToken);
++        }
++        super.onSaveInstanceState(outState);
++    }
++
++    @Override
++    protected void onDestroyInternal() {
++        String appId = getIwaAppId();
++        if (isChangingConfigurations() && appId != null && mIwaRecreationToken != null) {
++            reserveIwaRecreation(mIwaRecreationToken, appId);
++        }
++        super.onDestroyInternal();
++    }
++
+     private static @Nullable BrowserServicesIntentDataProvider sIntentDataProviderForTesting;
