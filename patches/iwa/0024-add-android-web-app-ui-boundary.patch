@@ -1,0 +1,225 @@
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -524,6 +524,7 @@ source_set("web_applications") {
+     sources += [
+       "extensions_manager_android.cc",
+       "os_integration/web_app_os_integration_android.cc",
++      "web_app_ui_manager_android.cc",
+       "web_app_utils.cc",
+       "web_app_utils.h",
+     ]
+--- /dev/null
++++ b/chrome/browser/web_applications/web_app_ui_manager_android.cc
+@@ -0,0 +1,212 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/web_app_ui_manager.h"
++
++#include <memory>
++#include <optional>
++#include <string>
++#include <utility>
++#include <vector>
++
++#include "base/functional/callback.h"
++#include "base/logging.h"
++#include "base/values.h"
++#include "components/webapps/browser/installable/ml_install_operation_tracker.h"
++#include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
++
++namespace web_app {
++
++namespace {
++
++// No Android app activity is wired up yet. Keep every unsupported UI operation
++// an explicit failure rather than reporting a successful launch or install.
++class AndroidWebAppUiManager final : public WebAppUiManager {
++ public:
++  void Start() override {}
++  void Shutdown() override {}
++  WebAppUiManagerImpl* AsImpl() override { return nullptr; }
++
++  // This manager cannot launch an app, so it has no app activity windows.
++  // Replace these methods with real activity tracking before enabling launch.
++  size_t GetNumWindowsForApp(const webapps::AppId& app_id) override {
++    return 0;
++  }
++  void CloseAppWindows(const webapps::AppId& app_id) override {}
++  void NotifyOnAllAppWindowsClosed(const webapps::AppId& app_id,
++                                   base::OnceClosure callback) override {
++    std::move(callback).Run();
++  }
++
++  bool CanAddAppToQuickLaunchBar() const override { return false; }
++  void AddAppToQuickLaunchBar(const webapps::AppId& app_id) override {}
++  bool IsAppInQuickLaunchBar(const webapps::AppId& app_id) const override {
++    return false;
++  }
++  bool IsAppMigrationSuggested(
++      BrowserWindowInterface* window) const override {
++    return false;
++  }
++  bool IsAppMigrationDialogShowing(
++      BrowserWindowInterface* window) const override {
++    return false;
++  }
++  bool CanReparentAppTabToWindow(
++      const webapps::AppId& app_id,
++      bool shortcut_created,
++      content::WebContents* web_contents) const override {
++    return false;
++  }
++  BrowserWindowInterface* ReparentAppTabToWindow(
++      content::WebContents* contents,
++      const webapps::AppId& app_id,
++      bool shortcut_created) override {
++    return nullptr;
++  }
++  BrowserWindowInterface* ReparentAppTabToWindow(
++      content::WebContents* contents,
++      const webapps::AppId& app_id,
++      base::OnceCallback<void(content::WebContents*)> callback) override {
++    std::move(callback).Run(nullptr);
++    return nullptr;
++  }
++
++  void ShowWebAppFileLaunchDialog(
++      const std::vector<base::FilePath>& file_paths,
++      const webapps::AppId& app_id,
++      WebAppLaunchAcceptanceCallback callback) override {
++    std::move(callback).Run(false, false);
++  }
++  void ShowWebAppProtocolLaunchDialog(
++      const GURL& protocol_url,
++      const webapps::AppId& app_id,
++      WebAppLaunchAcceptanceCallback callback) override {
++    std::move(callback).Run(false, false);
++  }
++  void ShowSubAppsInstallDialog(
++      content::WebContents* initiating_web_contents,
++      const std::vector<std::unique_ptr<WebAppInstallInfo>>& sub_apps,
++      const webapps::AppId& parent_app_id,
++      base::OnceCallback<void(bool)> callback) override {
++    std::move(callback).Run(false);
++  }
++  void ShowWebAppSettings(const webapps::AppId& app_id) override {}
++
++  void LaunchWebApp(apps::AppLaunchParams params,
++                    LaunchWebAppWindowSetting launch_setting,
++                    Profile& profile,
++                    LaunchWebAppDebugValueCallback callback,
++                    WithAppResources& app_resources) override {
++    base::DictValue debug;
++    debug.Set("error", "Android app activity launch is not implemented");
++    std::move(callback).Run({}, {},
++                            apps::LaunchContainer::kLaunchContainerNone,
++                            base::Value(std::move(debug)));
++  }
++  void NotifyAppRelaunchState(
++      const webapps::AppId& placeholder_app_id,
++      const webapps::AppId& final_app_id,
++      const std::u16string& final_app_name,
++      base::WeakPtr<Profile> profile,
++      AppRelaunchState relaunch_state) override {}
++  content::WebContents* CreateNewTab() override { return nullptr; }
++  bool IsWebContentsActiveTabInBrowser(
++      content::WebContents* web_contents) override {
++    return false;
++  }
++
++  void TriggerInstallDialog(content::WebContents* web_contents,
++                            webapps::WebappInstallSource source,
++                            InstallCallback callback) override {
++    std::move(callback).Run({}, webapps::InstallResultCode::kNotInstallable);
++  }
++  void TriggerInstallDialogForManifestInstall(
++      content::WebContents* initiating_web_contents,
++      base::WeakPtr<content::Page> initiating_page,
++      std::unique_ptr<webapps::MlInstallOperationTracker> tracker,
++      blink::mojom::ManifestPtr manifest,
++      const GURL& manifest_url,
++      const GURL& requesting_page_url,
++      InstallCallback callback) override {
++    std::move(callback).Run({}, webapps::InstallResultCode::kNotInstallable);
++  }
++  void TriggerLaunchDialogForBackgroundInstall(
++      content::WebContents* initiating_web_contents,
++      const webapps::AppId& app_id,
++      Profile* profile,
++      const std::string& app_name,
++      const SkBitmap& icon,
++      WebInstallAppLaunchAcceptanceCallback callback) override {
++    std::move(callback).Run(false);
++  }
++
++  void PresentUserUninstallDialog(
++      const webapps::AppId& app_id,
++      webapps::WebappUninstallSource uninstall_source,
++      BrowserWindow* parent_window,
++      UninstallCompleteCallback callback) override {
++    std::move(callback).Run(webapps::UninstallResultCode::kError);
++  }
++  void PresentUserUninstallDialog(
++      const webapps::AppId& app_id,
++      webapps::WebappUninstallSource uninstall_source,
++      gfx::NativeWindow parent_window,
++      UninstallCompleteCallback callback) override {
++    std::move(callback).Run(webapps::UninstallResultCode::kError);
++  }
++  void PresentUserUninstallDialog(
++      const webapps::AppId& app_id,
++      webapps::WebappUninstallSource uninstall_source,
++      gfx::NativeWindow parent_window,
++      UninstallCompleteCallback callback,
++      UninstallScheduledCallback scheduled_callback) override {
++    std::move(scheduled_callback).Run(false);
++    std::move(callback).Run(webapps::UninstallResultCode::kError);
++  }
++  void UninstallAppSilentlyForMigration(
++      const webapps::AppId& app_id) override {}
++  void ShowProfileErrorDialogForCorruptDB() override {
++    LOG(ERROR) << "Android web-app profile error dialog is unavailable";
++  }
++  void ShowIntentPicker(
++      const GURL& url,
++      content::WebContents* web_contents,
++      ShowIntentPickerBubbleCallback callback,
++      std::optional<webapps::AppId> scoped_app_id) override {
++    std::move(callback).Run(false);
++  }
++  void LaunchOrFocusIsolatedWebAppInstaller(
++      const base::FilePath& bundle_path) override {
++    LOG(ERROR) << "Android packaged IWA installer UI is unavailable";
++  }
++  void MaybeCreateEnableSupportedLinksInfobar(
++      content::WebContents* web_contents,
++      const std::string& launch_name) override {}
++  void MaybeCreateWebAppBlockedMigrationInfoBar(
++      content::WebContents* web_contents,
++      base::OnceClosure on_dismiss_callback) override {
++    std::move(on_dismiss_callback).Run();
++  }
++  void MaybeRemoveWebAppBlockedMigrationInfoBar(
++      content::WebContents* web_contents) override {}
++  void MaybeShowIPHPromoForAppsLaunchedViaLinkCapturing(
++      BrowserWindowInterface* browser,
++      Profile* profile,
++      const std::string& app_id) override {}
++};
++
++}  // namespace
++
++std::unique_ptr<WebAppUiManager> WebAppUiManager::Create(Profile* profile) {
++  return std::make_unique<AndroidWebAppUiManager>();
++}
++
++void WebAppUiManager::TriggerInstallNotSupportedDialog(
++    content::WebContents* web_contents,
++    Profile* profile,
++    base::OnceClosure callback) {
++  std::move(callback).Run();
++}
++
++}  // namespace web_app

@@ -1,0 +1,18 @@
+--- a/chrome/browser/web_applications/web_app_utils.cc
++++ b/chrome/browser/web_applications/web_app_utils.cc
+@@ -416,8 +416,12 @@ GetFileTypeAssociationsHandledByWebAppForDisplay(Profile* profile,
+       TransformFileExtensionsForDisplay(
+           apps::GetFileExtensionsFromFileHandlers(*file_handlers));
+ 
+-  return {base::JoinString(extensions_for_display,
+-                           l10n_util::GetStringUTF16(
+-                               IDS_WEB_APP_FILE_HANDLING_LIST_SEPARATOR)),
++#if BUILDFLAG(IS_ANDROID)
++  const auto separator = u", ";
++#else
++  const auto separator =
++      l10n_util::GetStringUTF16(IDS_WEB_APP_FILE_HANDLING_LIST_SEPARATOR);
++#endif
++  return {base::JoinString(extensions_for_display, separator),
+           extensions_for_display.size()};
+ }

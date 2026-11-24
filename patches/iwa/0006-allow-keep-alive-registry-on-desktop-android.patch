@@ -1,0 +1,13 @@
+--- a/components/keep_alive_registry/BUILD.gn
++++ b/components/keep_alive_registry/BUILD.gn
+@@ -2,7 +2,9 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(!is_android)
++import("//build/config/chrome_build.gni")
++
++assert(!is_android || is_desktop_android)
+ 
+ source_set("keep_alive_registry") {
+   sources = [

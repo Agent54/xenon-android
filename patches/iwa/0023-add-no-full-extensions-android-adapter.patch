@@ -1,0 +1,120 @@
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -523,5 +523,6 @@ source_set("web_applications") {
+   if (is_desktop_android) {
+     sources += [
++      "extensions_manager_android.cc",
+       "os_integration/web_app_os_integration_android.cc",
+       "web_app_utils.cc",
+       "web_app_utils.h",
+--- a/chrome/browser/web_applications/web_app_provider_factory.cc
++++ b/chrome/browser/web_applications/web_app_provider_factory.cc
+@@ -52,6 +52,9 @@ WebAppProviderFactory::WebAppProviderFactory()
+   // `WebAppInstallFinalizer::OnContentSettingChanged()`
+   DependsOn(HostContentSettingsMapFactory::GetInstance());
+-  DependsOn(ExtensionsManager::GetExtensionSystemSharedFactory());
++  if (auto* extension_factory =
++          ExtensionsManager::GetExtensionSystemSharedFactory()) {
++    DependsOn(extension_factory);
++  }
+   // Required to use different preinstalled app configs for managed devices.
+   DependsOn(policy::ManagementServiceFactory::GetInstance());
+ }
+--- /dev/null
++++ b/chrome/browser/web_applications/extensions_manager_android.cc
+@@ -0,0 +1,95 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/web_applications/extensions_manager.h"
++
++#include <memory>
++#include <string>
++#include <unordered_set>
++#include <utility>
++
++#include "base/check.h"
++#include "base/files/file_path.h"
++#include "base/functional/callback.h"
++#include "base/location.h"
++#include "base/task/sequenced_task_runner.h"
++#include "chrome/browser/web_applications/mojom/user_display_mode.mojom.h"
++#include "chrome/browser/web_applications/os_integration/web_app_shortcut.h"
++
++namespace web_app {
++
++namespace {
++
++// Full extensions are not built into the Android browser. Keep the web-app
++// provider's extension dependency explicit until a core-backed adapter exists.
++class AndroidExtensionsManager final : public ExtensionsManager {
++ public:
++  void OnExtensionSystemReady(base::OnceClosure on_ready) override {
++    base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++        FROM_HERE, std::move(on_ready));
++  }
++
++  std::unordered_set<base::FilePath> GetIsolatedStoragePaths() override {
++    // Storage-partition GC is disabled on Android until this can preserve all
++    // extension storage paths.
++    CHECK(false);
++    return {};
++  }
++
++  std::unique_ptr<ExtensionInstallGate>
++  RegisterGarbageCollectionInstallGate() override {
++    CHECK(false);
++    return nullptr;
++  }
++
++  bool IsExtensionBlockedByPolicy(const std::string& extension_id) override {
++    return false;
++  }
++  bool IsExtensionInstalled(const std::string& extension_id) override {
++    return false;
++  }
++  bool IsExtensionForceInstalled(const std::string& extension_id,
++                                 std::u16string* reason) override {
++    return false;
++  }
++  bool IsExtensionDefaultInstalled(const std::string& extension_id) override {
++    return false;
++  }
++  bool IsExternalExtensionUninstalled(
++      const std::string& extension_id) override {
++    return false;
++  }
++  bool DidPreinstalledAppsPerformNewInstallation() override { return false; }
++  bool IsPreinstalledExtensionAppId(const std::string& app_id) override {
++    return false;
++  }
++
++  void CopyAppSortingLayout(const std::string& from_extension_id,
++                            const std::string& to_web_app_id) override {}
++  mojom::UserDisplayMode GetExtensionUserDisplayMode(
++      const std::string& extension_id) override {
++    return mojom::UserDisplayMode::kBrowser;
++  }
++  std::unique_ptr<ShortcutInfo> GetExtensionShortcutInfo(
++      const std::string& extension_id) override {
++    return nullptr;
++  }
++  void WaitForExtensionShortcutsDeleted(const std::string& extension_id,
++                                        base::OnceClosure callback) override {
++    std::move(callback).Run();
++  }
++};
++
++}  // namespace
++
++std::unique_ptr<ExtensionsManager> ExtensionsManager::CreateForProfile(
++    Profile* profile) {
++  return std::make_unique<AndroidExtensionsManager>();
++}
++
++KeyedServiceBaseFactory* ExtensionsManager::GetExtensionSystemSharedFactory() {
++  return nullptr;
++}
++
++}  // namespace web_app

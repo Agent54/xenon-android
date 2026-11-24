@@ -1,0 +1,18 @@
+--- a/chrome/browser/web_applications/web_app_install_info.h
++++ b/chrome/browser/web_applications/web_app_install_info.h
+@@ -16,6 +16,7 @@
+ #include "base/values.h"
++#include "build/android_buildflags.h"
+ #include "build/build_config.h"
+ #include "chrome/browser/web_applications/model/dialog_image_info.h"
+ #include "chrome/browser/web_applications/model/display_override.h"
+ #include "chrome/browser/web_applications/model/localized_text.h"
+ 
+@@ -40,6 +41,6 @@
+ #include "url/gurl.h"
+ 
+ static_assert(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-              BUILDFLAG(IS_CHROMEOS));
++              BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID));
+ 
+ namespace web_app {

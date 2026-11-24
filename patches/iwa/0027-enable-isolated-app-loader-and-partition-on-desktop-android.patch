@@ -1,0 +1,112 @@
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -613,6 +613,11 @@
+ #include "third_party/blink/public/mojom/installedapp/related_application.mojom.h"
+ #endif  // !BUILDFLAG(IS_ANDROID)
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
++#include "components/webapps/isolated_web_apps/url_loading/url_loader_factory.h"
++#endif
++
+ #if BUILDFLAG(IS_CHROMEOS)
+ #include "ash/constants/webui_url_constants.h"
+ #include "ash/shell.h"
+@@ -880,6 +885,6 @@ bool IsIsolatedWebAppOrigin(const url::Origin& origin) {
+ bool IsIsolatedWebAppOrigin(const url::Origin& origin) {
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   return origin.scheme() == webapps::kIsolatedAppScheme;
+ #else
+   return false;
+@@ -888,7 +893,7 @@ bool IsIsolatedWebAppOrigin(const url::Origin& origin) {
+ }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+ bool IsIsolatedWebAppUrl(const GURL& url) {
+   return url.SchemeIs(webapps::kIsolatedAppScheme);
+ }
+@@ -1803,7 +1808,8 @@ ChromeContentBrowserClient::GetStoragePartitionConfigForSite(
+   }
+ #endif
+ 
+-#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) && \
++    (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID))
+   if (content::SiteIsolationPolicy::ShouldUrlUseApplicationIsolationLevel(
+           browser_context, site)) {
+     CHECK(IsIsolatedWebAppUrl(site));
+@@ -1817,7 +1823,7 @@ ChromeContentBrowserClient::GetStoragePartitionConfigForSite(
+ 
+     return iwa_url_info.storage_partition_config(browser_context);
+   }
+-#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE) && !BUILDFLAG(IS_ANDROID)
++#endif
+ 
+   return default_storage_partition_config;
+ }
+@@ -2761,7 +2767,8 @@ bool ChromeContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
+ bool ChromeContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
+     content::BrowserContext* browser_context,
+     const GURL& url) {
+-#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) && !BUILDFLAG(IS_ANDROID)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE) && \
++    (!BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID))
+   if (!content::AreIsolatedWebAppsEnabled(browser_context)) {
+     return false;
+   }
+@@ -2773,6 +2780,6 @@ bool ChromeContentBrowserClient::ShouldUrlUseApplicationIsolationLevel(
+   if (IsIsolatedWebAppOrigin(origin)) {
+     return true;
+   }
+-#endif  // BUILDFLAG(ENABLE_EXTENSIONS_CORE) && !BUILDFLAG(IS_ANDROID)
++#endif
+   return false;
+ }
+@@ -6118,7 +6125,7 @@ ChromeContentBrowserClient::CreateNonNetworkNavigationURLLoaderFactory(
+   }
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   if (scheme == webapps::kIsolatedAppScheme) {
+     if (content::AreIsolatedWebAppsEnabled(browser_context) &&
+         !browser_context->ShutdownStarted()) {
+@@ -6192,7 +6199,7 @@ ChromeContentBrowserClient::RegisterNonNetworkWorkerMainResourceURLLoaderFactories(
+   DCHECK(factories);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   if (content::AreIsolatedWebAppsEnabled(browser_context) &&
+       !browser_context->ShutdownStarted()) {
+     std::optional<url::Origin> app_origin;
+@@ -6238,7 +6245,7 @@ ChromeContentBrowserClient::RegisterNonNetworkServiceWorkerUpdateURLLoaderFactories(
+   DCHECK(factories);
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   if (content::AreIsolatedWebAppsEnabled(browser_context) &&
+       !browser_context->ShutdownStarted()) {
+     factories->emplace(webapps::kIsolatedAppScheme,
+@@ -6519,7 +6526,7 @@ ChromeContentBrowserClient::RegisterNonNetworkSubresourceURLLoaderFactories(
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   {
+     auto* rph = content::RenderProcessHost::FromID(render_process_id);
+     content::BrowserContext* browser_context = rph->GetBrowserContext();
+@@ -8034,6 +8041,6 @@ void ChromeContentBrowserClient::GrantAdditionalRequestPrivilegesToWorkerProcess(
+                                                     const GURL& script_url) {
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   // IWA Service Workers need to be explicitly granted access to their origin
+   // because isolated-app: isn't a web-safe scheme that can be accessed by
+   // default.

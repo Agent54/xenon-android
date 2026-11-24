@@ -1,0 +1,331 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 2133a96..1a33f94 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -3003,6 +3003,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/DevToolsServer.java",
+       "java/src/org/chromium/chrome/browser/ExternalIntentUrlChecker.java",
+       "java/src/org/chromium/chrome/browser/IntentHandler.java",
++      "java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java",
+       "java/src/org/chromium/chrome/browser/KeyboardShortcuts.java",
+       "java/src/org/chromium/chrome/browser/PlayServicesVersionInfo.java",
+       "java/src/org/chromium/chrome/browser/RecentlyClosedEntriesManager.java",
+diff --git a/chrome/android/chrome_java_sources.gni b/chrome/android/chrome_java_sources.gni
+index 1a541dc..c7ac324 100644
+--- a/chrome/android/chrome_java_sources.gni
++++ b/chrome/android/chrome_java_sources.gni
+@@ -1366,6 +1366,7 @@ chrome_java_sources = [
+   "java/src/org/chromium/chrome/browser/webapps/WebApkUpdateReportAbuseDialog.java",
+   "java/src/org/chromium/chrome/browser/webapps/WebApkUpdateTask.java",
+   "java/src/org/chromium/chrome/browser/webapps/WebappActionsNotificationManager.java",
++  "java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java",
+   "java/src/org/chromium/chrome/browser/webapps/WebappActivity.java",
+   "java/src/org/chromium/chrome/browser/webapps/WebappActivityCoordinator.java",
+   "java/src/org/chromium/chrome/browser/webapps/WebappAuthenticator.java",
+diff --git a/chrome/android/java/AndroidManifest.xml b/chrome/android/java/AndroidManifest.xml
+index bb74034..2afd4f8 100644
+--- a/chrome/android/java/AndroidManifest.xml
++++ b/chrome/android/java/AndroidManifest.xml
+@@ -810,6 +810,16 @@ by a child template that "extends" this file.
+                                that users don't have any instances of the original Activity still
+                                running.
+         -->
++        <activity android:name="org.chromium.chrome.browser.webapps.IwaLauncherActivity"
++            android:theme="@style/Theme.Chromium.Activity.Fullscreen"
++            android:taskAffinity=""
++            android:excludeFromRecents="true"
++            android:exported="true">
++            <intent-filter>
++                <action android:name="org.agent54.xenon.iwa.LAUNCH" />
++                <category android:name="android.intent.category.DEFAULT" />
++            </intent-filter>
++        </activity>
+         <activity android:name="org.chromium.chrome.browser.webapps.WebappLauncherActivity"
+             android:theme="@style/Theme.BrowserUI.NoDisplay"
+             android:taskAffinity=""
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
+new file mode 100644
+index 0000000..4163145
+--- /dev/null
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java
+@@ -0,0 +1,109 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++package org.chromium.chrome.browser.webapps;
++
++import android.app.Activity;
++import android.content.Intent;
++import android.os.Bundle;
++import android.os.Handler;
++import android.os.Looper;
++import android.text.TextUtils;
++
++import org.jni_zero.CalledByNative;
++import org.jni_zero.JniType;
++import org.jni_zero.NativeMethods;
++
++import org.chromium.base.IntentUtils;
++import org.chromium.base.Log;
++import org.chromium.build.annotations.NullMarked;
++import org.chromium.build.annotations.Nullable;
++import org.chromium.chrome.browser.firstrun.FirstRunStatus;
++import org.chromium.chrome.browser.init.ChromeBrowserInitializer;
++import org.chromium.chrome.browser.profiles.Profile;
++import org.chromium.chrome.browser.profiles.ProfileManager;
++
++/** App-owned entry point for an already installed isolated web app. */
++@NullMarked
++public class IwaLauncherActivity extends Activity {
++    private static final String TAG = "IwaLauncher";
++    private static final long REGISTRY_TIMEOUT_MS = 15000;
++
++    public static final String ACTION_LAUNCH_IWA = "org.agent54.xenon.iwa.LAUNCH";
++    public static final String EXTRA_APP_ID = "org.agent54.xenon.iwa.APP_ID";
++
++    private final Handler mHandler = new Handler(Looper.getMainLooper());
++    private final Runnable mTimeout =
++            () -> {
++                Log.e(TAG, "Installed IWA registry did not become ready");
++                finish();
++            };
++
++    @Override
++    protected void onCreate(@Nullable Bundle savedInstanceState) {
++        super.onCreate(savedInstanceState);
++        Intent intent = getIntent();
++        if (!ACTION_LAUNCH_IWA.equals(intent.getAction())
++                || TextUtils.isEmpty(IntentUtils.safeGetStringExtra(intent, EXTRA_APP_ID))) {
++            Log.e(TAG, "IWA launch rejected: invalid request");
++            finish();
++            return;
++        }
++        if (!FirstRunStatus.getFirstRunFlowComplete()) {
++            Log.i(TAG, "IWA launch requires completion of browser first run");
++            finish();
++            return;
++        }
++
++        ChromeBrowserInitializer.getInstance().handleSynchronousStartup();
++        Profile profile = ProfileManager.getLastUsedRegularProfile();
++        if (profile.isOffTheRecord()) {
++            finish();
++            return;
++        }
++        String appId = IntentUtils.safeGetStringExtra(intent, EXTRA_APP_ID);
++        if (appId == null) {
++            finish();
++            return;
++        }
++        mHandler.postDelayed(mTimeout, REGISTRY_TIMEOUT_MS);
++        IwaLauncherActivityJni.get().requestLaunch(profile, appId, this);
++    }
++
++    @CalledByNative
++    private void onResolved(
++            @JniType("std::string") String appId,
++            @JniType("std::string") String startUrl,
++            @JniType("std::string") String scope,
++            @JniType("std::string") String name) {
++        mHandler.removeCallbacks(mTimeout);
++        if (!isFinishing() && !isDestroyed()) {
++            if (!WebappLauncherActivity.launchInstalledIwa(appId, startUrl, scope, name)) {
++                Log.e(TAG, "Failed to start the installed IWA activity");
++            }
++        }
++        finish();
++    }
++
++    @CalledByNative
++    private void onNotInstalled() {
++        mHandler.removeCallbacks(mTimeout);
++        Log.e(TAG, "IWA launch rejected: app is not installed or launchable");
++        finish();
++    }
++
++    @Override
++    protected void onDestroy() {
++        mHandler.removeCallbacks(mTimeout);
++        super.onDestroy();
++    }
++
++    @NativeMethods
++    interface Natives {
++        void requestLaunch(
++                @JniType("Profile*") Profile profile,
++                @JniType("std::string") String appId,
++                IwaLauncherActivity activity);
++    }
++}
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java
+index a77aae5..c2f886d 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappLauncherActivity.java
+@@ -22,6 +22,7 @@ import android.util.Base64;
+ 
+ import androidx.annotation.VisibleForTesting;
+ 
++import org.chromium.blink.mojom.DisplayMode;
+ import org.chromium.base.ContextUtils;
+ import org.chromium.base.IntentUtils;
+ import org.chromium.base.Log;
+@@ -66,6 +67,30 @@ public class WebappLauncherActivity extends Activity {
+     public static final String ACTION_START_SECURE_WEBAPP =
+             "org.chromium.chrome.browser.webapps.WebappManager.ACTION_START_SECURE_WEBAPP";
+ 
++    /** Starts a registry-verified IWA in the private standalone activity. */
++    static boolean launchInstalledIwa(String appId, String url, String scope, String name) {
++        Intent sourceIntent = new Intent();
++        sourceIntent.putExtra(WebappConstants.EXTRA_ID, appId);
++        sourceIntent.putExtra(WebappConstants.EXTRA_URL, url);
++        sourceIntent.putExtra(WebappConstants.EXTRA_SCOPE, scope);
++        sourceIntent.putExtra(WebappConstants.EXTRA_NAME, name);
++        sourceIntent.putExtra(WebappConstants.EXTRA_SHORT_NAME, name);
++        sourceIntent.putExtra(WebappConstants.EXTRA_DISPLAY_MODE, DisplayMode.STANDALONE);
++        sourceIntent.putExtra(WebappConstants.EXTRA_SOURCE, ShortcutSource.UNKNOWN);
++
++        LaunchData launchData =
++                new LaunchData(
++                        appId,
++                        url,
++                        /* webApkPackageName= */ null,
++                        /* isSplashProvidedByWebApk= */ false);
++        launchData.isIconTrusted = true;
++        Intent launchIntent = createIntentToLaunchForWebapp(sourceIntent, launchData);
++        launchIntent.putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId);
++        return IntentUtils.safeStartActivity(
++                ContextUtils.getApplicationContext(), launchIntent);
++    }
++
+     /**
+      * Delay in ms for relaunching WebAPK as a result of getting intent with extra
+      * {@link WebApkConstants.EXTRA_RELAUNCH}. The delay was chosen arbirtarily and seems to
+diff --git a/chrome/browser/web_applications/BUILD.gn b/chrome/browser/web_applications/BUILD.gn
+index 07e4ee8..26fa304 100644
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -523,6 +523,7 @@ source_set("web_applications") {
+ 
+   if (is_desktop_android) {
+     sources += [
++      "android_iwa_launcher.cc",
+       "extensions_manager_android.cc",
+       "os_integration/web_app_os_integration_android.cc",
+       "web_app_ui_manager_android.cc",
+@@ -629,6 +630,10 @@ source_set("web_applications") {
+     "//url",
+   ]
+ 
++  if (is_desktop_android) {
++    deps += [ "//chrome/android:chrome_jni_headers" ]
++  }
++
+   if (is_chrome_branded) {
+     sources += [
+       "preinstalled_web_apps/gmail.cc",
+diff --git a/chrome/browser/web_applications/android_iwa_launcher.cc b/chrome/browser/web_applications/android_iwa_launcher.cc
+new file mode 100644
+index 0000000..51dc3a3
+--- /dev/null
++++ b/chrome/browser/web_applications/android_iwa_launcher.cc
+@@ -0,0 +1,99 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include <string>
++#include <utility>
++
++#include "base/android/jni_android.h"
++#include "base/android/jni_string.h"
++#include "base/android/jni_weak_ref.h"
++#include "base/android/scoped_java_ref.h"
++#include "base/functional/bind.h"
++#include "base/memory/weak_ptr.h"
++#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
++#include "chrome/browser/web_applications/web_app_filter.h"
++#include "chrome/browser/web_applications/web_app_provider.h"
++#include "chrome/browser/web_applications/web_app_registrar.h"
++#include "components/webapps/isolated_web_apps/scheme.h"
++#include "content/public/browser/isolated_web_apps_policy.h"
++#include "url/origin.h"
++
++// Must come after headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/IwaLauncherActivity_jni.h"
++
++namespace {
++
++using web_app::IsolatedWebAppUrlInfo;
++using web_app::WebAppFilter;
++using web_app::WebAppProvider;
++using web_app::WebAppRegistrar;
++
++void ResolveInstalledIwa(
++    base::WeakPtr<WebAppProvider> provider,
++    std::string app_id,
++    JavaObjectWeakGlobalRef java_activity) {
++  JNIEnv* env = base::android::AttachCurrentThread();
++  auto local_activity = java_activity.get(env);
++  if (!local_activity) {
++    return;
++  }
++  if (!provider || !provider->is_registry_ready()) {
++    Java_IwaLauncherActivity_onNotInstalled(env, local_activity);
++    return;
++  }
++
++  const WebAppRegistrar& registrar = provider->registrar_unsafe();
++  if (!registrar.AppMatches(app_id, WebAppFilter::IsIsolatedApp()) ||
++      !registrar.AppMatches(app_id, WebAppFilter::InstalledInChrome())) {
++    Java_IwaLauncherActivity_onNotInstalled(env, local_activity);
++    return;
++  }
++
++  const GURL& start_url = registrar.GetAppStartUrl(app_id);
++  const GURL scope = registrar.GetAppScope(app_id);
++  const auto url_info = IsolatedWebAppUrlInfo::Create(start_url);
++  if (!url_info.has_value() || url_info->app_id() != app_id ||
++      !scope.SchemeIs(webapps::kIsolatedAppScheme) ||
++      url::Origin::Create(scope) != url::Origin::Create(start_url)) {
++    Java_IwaLauncherActivity_onNotInstalled(env, local_activity);
++    return;
++  }
++
++  Java_IwaLauncherActivity_onResolved(
++      env, local_activity, app_id, start_url.spec(), scope.spec(),
++      registrar.GetAppShortName(app_id));
++}
++
++}  // namespace
++
++static void JNI_IwaLauncherActivity_RequestLaunch(
++    JNIEnv* env,
++    Profile* profile,
++    const std::string& app_id,
++    const base::android::JavaRef<
++        org::chromium::chrome::browser::webapps::JIwaLauncherActivity>&
++        java_activity) {
++  if (!profile || profile->IsOffTheRecord() ||
++      !content::AreIsolatedWebAppsEnabled(profile)) {
++    Java_IwaLauncherActivity_onNotInstalled(env, java_activity);
++    return;
++  }
++
++  web_app::WebAppProvider* provider =
++      web_app::WebAppProvider::GetForWebApps(profile);
++  if (!provider) {
++    Java_IwaLauncherActivity_onNotInstalled(env, java_activity);
++    return;
++  }
++
++  provider->on_registry_ready().Post(
++      FROM_HERE,
++      base::BindOnce(&ResolveInstalledIwa, provider->AsWeakPtr(), app_id,
++                     JavaObjectWeakGlobalRef(
++                         env, base::android::JavaRef<jobject>::CreateLeaky(
++                                  env, java_activity.obj()))));
++}
++
++DEFINE_JNI(IwaLauncherActivity)

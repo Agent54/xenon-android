@@ -1,0 +1,18 @@
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -805,6 +805,7 @@ if (!is_android) {
+   }
+ }
+ 
++if (!is_android) {
+ # This test_support library doesn't use extensions. It must not depend on
+ # //chrome/test:test_support{_ui} as it is depended upon by those targets.
+ source_set("web_applications_test_support") {
+@@ -1580,6 +1581,7 @@ source_set("web_app_test") {
+     "//testing/gtest",
+   ]
+ }
++}
+ 
+ # Separate from :web_applications_test_support because this browser-test
+ # helper depends on //chrome/test:test_support, which cannot be a dependency

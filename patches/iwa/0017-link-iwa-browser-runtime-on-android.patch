@@ -1,0 +1,10 @@
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -1400,6 +1400,7 @@ source_set("core") {
+   if (is_desktop_android) {
+     deps += [
+       "//chrome/browser/web_applications",
++      "//chrome/browser/web_applications/isolated_web_apps",
+       "//chrome/browser/web_applications:features",
+       "//chrome/browser/web_applications:sub_apps_service",
+       "//components/webapps/isolated_web_apps:scheme",

@@ -1,0 +1,35 @@
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -218,5 +218,9 @@ void OnLocalStatePrefsLoaded();
+ #endif  // BUILDFLAG(IS_ANDROID)
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++#include "chrome/browser/web_applications/isolated_web_apps/runtime_init.h"
++#endif
++
+ #if BUILDFLAG(ENABLE_BACKGROUND_MODE)
+ #include "chrome/browser/background/extensions/background_mode_manager.h"
+ #endif
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -655,6 +655,11 @@
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+         // BUILDFLAG(IS_CHROMEOS)
+ 
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++#include "chrome/browser/web_applications/isolated_web_apps/chrome_content_browser_client_isolated_web_apps_part.h"
++#include "components/webapps/isolated_web_apps/scheme.h"
++#endif
++
+ #if BUILDFLAG(ENABLE_CAPTIVE_PORTAL_DETECTION)
+ #include "components/captive_portal/content/captive_portal_tab_helper.h"
+ #include "components/captive_portal/content/captive_portal_url_loader_throttle.h"
+@@ -833,7 +838,7 @@
+ using plugins::ChromeContentBrowserClientPluginsPart;
+ #endif
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+ using web_app::ChromeContentBrowserClientIsolatedWebAppsPart;
+ #endif
+ 

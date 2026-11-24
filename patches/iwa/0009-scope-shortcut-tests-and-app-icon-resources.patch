@@ -1,0 +1,32 @@
+--- a/chrome/browser/shortcuts/BUILD.gn
++++ b/chrome/browser/shortcuts/BUILD.gn
+@@ -132,7 +132,7 @@ source_set("shortcuts") {
+   }
+ }
+ 
+-if (!is_chromeos) {
++if (!is_chromeos && !is_android) {
+   source_set("browser_tests") {
+     testonly = true
+ 
+--- a/chrome/browser/resources/BUILD.gn
++++ b/chrome/browser/resources/BUILD.gn
+@@ -333,7 +333,7 @@ if (enable_extensions_core) {
+   }
+ }
+ 
+-if (!is_android) {
++if (!is_android || is_desktop_android) {
+   grit("app_icon_resources") {
+     source = "app_icon/app_icon_resources.grd"
+     inputs = [
+@@ -354,6 +354,9 @@ if (!is_android) {
+     ]
+     output_dir = "$root_gen_dir/chrome"
+   }
++}
++
++if (!is_android) {
+ 
+   if (is_chromeos) {
+     grit("office_web_app_resources") {

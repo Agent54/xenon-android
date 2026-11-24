@@ -1,0 +1,15 @@
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -519,5 +519,12 @@ source_set("web_applications") {
+       "web_app_utils.h",
+     ]
+   }
+ 
++  if (is_desktop_android) {
++    sources += [
++      "web_app_utils.cc",
++      "web_app_utils.h",
++    ]
++  }
++
+   if (!is_chromeos) {

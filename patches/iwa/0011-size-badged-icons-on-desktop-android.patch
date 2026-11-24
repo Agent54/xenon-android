@@ -1,0 +1,18 @@
+--- a/chrome/browser/shortcuts/icon_badging.cc
++++ b/chrome/browser/shortcuts/icon_badging.cc
+@@ -15,5 +15,6 @@
+ #include "base/numerics/safe_conversions.h"
+ #include "base/version_info/channel.h"
++#include "build/android_buildflags.h"
+ #include "build/branding_buildflags.h"
+ #include "build/buildflag.h"
+ #include "chrome/common/channel_info.h"
+@@ -65,5 +65,8 @@ constexpr ShortcutSize kSizesNeededForShortcutCreation[] = {
+     ShortcutSize::k16, ShortcutSize::k32, ShortcutSize::k48,
+     ShortcutSize::k256};
++#elif BUILDFLAG(IS_DESKTOP_ANDROID)
++constexpr ShortcutSize kSizesNeededForShortcutCreation[] = {ShortcutSize::k128,
++                                                            ShortcutSize::k256};
+ #endif
+ 
+ int ToInt(ShortcutSize size) {

@@ -1,0 +1,38 @@
+--- a/chrome/browser/web_applications/web_app_command_scheduler.cc
++++ b/chrome/browser/web_applications/web_app_command_scheduler.cc
+@@ -346,8 +346,16 @@ void WebAppCommandScheduler::ApplyPendingIsolatedWebAppUpdate(
+     base::OnceCallback<void(IsolatedWebAppApplyUpdateCommandResult)> callback,
+     const base::Location& call_location) {
++#if BUILDFLAG(IS_ANDROID)
++  // Android has no IWA activity lifecycle tracking yet. Applying an update
++  // while the app is open could replace its bundle underneath a live page.
++  std::move(callback).Run(base::unexpected(
++      IsolatedWebAppApplyUpdateCommandError{
++          "IWA update application is not supported on Android"}));
++#else
+   provider_->command_manager().ScheduleCommand(
+       std::make_unique<IsolatedWebAppApplyUpdateCommand>(
+           url_info, *profile_, std::move(optional_keep_alive),
+           std::move(optional_profile_keep_alive), std::move(callback)),
+       call_location);
++#endif  // BUILDFLAG(IS_ANDROID)
+ }
+@@ -938,5 +946,12 @@ void WebAppCommandScheduler::LaunchApp(apps::AppLaunchParams params,
+                                        LaunchWebAppCallback callback,
+                                        const base::Location& location) {
++#if BUILDFLAG(IS_ANDROID)
++  // The Android UI manager cannot create an independent app activity yet.
++  // Fail before LaunchWebAppCommand changes any OS-integration state.
++  base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
++      FROM_HERE, base::BindOnce(std::move(callback), nullptr, nullptr,
++                                apps::LaunchContainer::kLaunchContainerNone));
++#else
+   // Note: Handle the shutdown here, as we have to catch when KeepAlives cannot
+   // be created.
+   if (IsShuttingDown()) {
+@@ -970,4 +985,5 @@ void WebAppCommandScheduler::LaunchApp(apps::AppLaunchParams params,
+     return;
+   }
+   std::move(launch_with_keep_alives).Run();
++#endif  // BUILDFLAG(IS_ANDROID)
+ }

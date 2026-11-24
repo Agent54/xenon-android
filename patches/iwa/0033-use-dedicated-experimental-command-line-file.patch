@@ -1,0 +1,14 @@
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/base/SplitCompatApplication.java b/chrome/android/java/src/org/chromium/chrome/browser/base/SplitCompatApplication.java
+index 88bd055..9fedf28 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/base/SplitCompatApplication.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/base/SplitCompatApplication.java
+@@ -66,7 +66,8 @@ public class SplitCompatApplication extends Application {
+     public static final String CHROME_SPLIT_NAME = "chrome";
+     public static final String ON_DEMAND_SPLIT_NAME = "on_demand";
+     private static final String TAG = "SplitCompatApp";
+-    private static final String COMMAND_LINE_FILE = "chrome-command-line";
++    // The experimental IWA APK must not consume the working browser's debug flags.
++    private static final String COMMAND_LINE_FILE = "xenon-iwa-command-line";
+     private static final String ATTACH_BASE_CONTEXT_EVENT = "ChromeApplication.attachBaseContext";
+     // Public to allow use in ChromeBackupAgent
+     public static final String PRIVATE_DATA_DIRECTORY_SUFFIX = "chrome";

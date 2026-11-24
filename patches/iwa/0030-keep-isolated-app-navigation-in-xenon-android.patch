@@ -1,0 +1,57 @@
+--- a/components/embedder_support/android/BUILD.gn
++++ b/components/embedder_support/android/BUILD.gn
+@@ -193,7 +193,8 @@
+     deps = [
+       ":util_jni_java",
+       "//base:base_java",
+       "//base:flagged_apis_java",
++      "//build/android:build_java",
+       "//components/url_formatter/android:url_formatter_java",
+       "//content/public/android:content_main_dex_java",
+       "//content/public/common:common_java",
+--- a/components/embedder_support/android/java/src/org/chromium/components/embedder_support/util/UrlUtilities.java
++++ b/components/embedder_support/android/java/src/org/chromium/components/embedder_support/util/UrlUtilities.java
+@@ -16,4 +16,5 @@
+ import org.chromium.base.library_loader.LibraryLoader;
++import org.chromium.build.BuildConfig;
+ import org.chromium.build.annotations.Contract;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -95,6 +96,7 @@
+     public static boolean isAcceptedScheme(@Nullable GURL url) {
+         if (GURL.isEmptyOrInvalid(url)) return false;
+         return SUPPORTED_SCHEMES.contains(url.getScheme())
++                || (BuildConfig.IS_DESKTOP_ANDROID && "isolated-app".equals(url.getScheme()))
+                 || (url.getScheme().equals(UrlConstants.CHROME_SCHEME)
+                         && EmbedderSupportFeatures.ANDROID_CHROME_SCHEME_NAVIGATION_KILL_SWITCH
+                                 .isEnabled());
+--- a/components/external_intents/android/java/src/org/chromium/components/external_intents/InterceptNavigationDelegateImpl.java
++++ b/components/external_intents/android/java/src/org/chromium/components/external_intents/InterceptNavigationDelegateImpl.java
+@@ -279,6 +279,10 @@
+         }
+ 
+         mShouldIgnoreResultCallback = resultCallback;
++        boolean isExternalProtocol =
++                navigationHandle.isExternalProtocol()
++                        && !("isolated-app".equals(escapedUrl.getScheme())
++                                && UrlUtilities.isAcceptedScheme(escapedUrl));
+         OverrideUrlLoadingResult result =
+                 shouldOverrideUrlLoading(
+                         redirectHandler,
+@@ -290,7 +294,7 @@
+                         navigationHandle.getReferrer(),
+                         navigationHandle.isInPrimaryMainFrame(),
+                         navigationHandle.getInitiatorOrigin(),
+-                        navigationHandle.isExternalProtocol(),
++                        isExternalProtocol,
+                         this::onDidAsyncActionInMainFrame,
+                         hiddenCrossFrame,
+                         isSandboxedFrame,
+@@ -297,6 +301,6 @@
+                         shouldRunAsync);
+         if (!shouldRunAsync) {
+             onMainFrameShouldIgnoreNavigationResult(
+-                    assumeNonNull(result), escapedUrl, navigationHandle.isExternalProtocol());
++                    assumeNonNull(result), escapedUrl, isExternalProtocol);
+         }
+     }

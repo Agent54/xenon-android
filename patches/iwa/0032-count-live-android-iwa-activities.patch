@@ -1,0 +1,152 @@
+diff --git a/chrome/android/BUILD.gn b/chrome/android/BUILD.gn
+index 1a33f94..318ce86 100644
+--- a/chrome/android/BUILD.gn
++++ b/chrome/android/BUILD.gn
+@@ -3003,6 +3003,7 @@ if (_is_default_toolchain) {
+       "java/src/org/chromium/chrome/browser/DevToolsServer.java",
+       "java/src/org/chromium/chrome/browser/ExternalIntentUrlChecker.java",
+       "java/src/org/chromium/chrome/browser/IntentHandler.java",
++      "java/src/org/chromium/chrome/browser/webapps/WebappActivity.java",
+       "java/src/org/chromium/chrome/browser/webapps/IwaLauncherActivity.java",
+       "java/src/org/chromium/chrome/browser/KeyboardShortcuts.java",
+       "java/src/org/chromium/chrome/browser/PlayServicesVersionInfo.java",
+diff --git a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+index dd06b10..8760ee9 100644
+--- a/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
++++ b/chrome/android/java/src/org/chromium/chrome/browser/webapps/WebappActivity.java
+@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.webapps;
+ import static org.chromium.components.webapk.lib.common.WebApkConstants.WEBAPK_PACKAGE_PREFIX;
+ import static org.chromium.webapk.lib.common.WebApkConstants.EXTRA_WEBAPK_PACKAGE_NAME;
+ 
++import android.app.Activity;
+ import android.content.Intent;
+ import android.graphics.drawable.Drawable;
+ import android.os.Bundle;
+@@ -14,8 +15,13 @@ import android.text.TextUtils;
+ 
+ import androidx.browser.customtabs.CustomTabsIntent;
+ 
++import org.jni_zero.CalledByNative;
++import org.jni_zero.JniType;
++
++import org.chromium.base.ApplicationStatus;
+ import org.chromium.base.IntentUtils;
+ import org.chromium.base.ResettersForTesting;
++import org.chromium.base.ThreadUtils;
+ import org.chromium.base.metrics.RecordUserAction;
+ import org.chromium.build.annotations.NullMarked;
+ import org.chromium.build.annotations.Nullable;
+@@ -34,6 +40,23 @@ import org.chromium.components.browser_ui.util.motion.MotionEventInfo;
+ public class WebappActivity extends BaseCustomTabActivity {
+     public static final String WEBAPP_SCHEME = "webapp";
+ 
++    /** Counts non-destroyed IWA document activities, including backgrounded ones. */
++    @CalledByNative
++    static int getNumIwaWindowsForApp(@JniType("std::string") String appId) {
++        ThreadUtils.assertOnUiThread();
++        int count = 0;
++        for (Activity activity : ApplicationStatus.getRunningActivities()) {
++            if (!(activity instanceof WebappActivity)) continue;
++            Intent intent = activity.getIntent();
++            if (intent != null
++                    && appId.equals(
++                            IntentUtils.safeGetStringExtra(intent, IwaLauncherActivity.EXTRA_APP_ID))) {
++                count++;
++            }
++        }
++        return count;
++    }
++
+     private static @Nullable BrowserServicesIntentDataProvider sIntentDataProviderForTesting;
+ 
+     @Override
+diff --git a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+index 0652487..8472e85 100644
+--- a/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
++++ b/chrome/android/junit/src/org/chromium/chrome/browser/webapps/WebappActivityTest.java
+@@ -19,6 +19,8 @@ import org.junit.Test;
+ import org.junit.runner.RunWith;
+ import org.robolectric.annotation.Config;
+ 
++import org.chromium.base.ActivityState;
++import org.chromium.base.ApplicationStatus;
+ import org.chromium.base.test.BaseRobolectricTestRunner;
+ import org.chromium.base.test.util.Features;
+ import org.chromium.chrome.browser.browserservices.intents.BrowserServicesIntentDataProvider;
+@@ -31,6 +33,39 @@ import org.chromium.webapk.test.WebApkTestHelper;
+ @RunWith(BaseRobolectricTestRunner.class)
+ @Config(sdk = 33)
+ public class WebappActivityTest {
++    @Test
++    public void iwaWindowCountTracksActivityUntilDestroyed() {
++        String appId = "idgjjoiemckfcohgjoaafbninphmambh";
++        TestWebappActivity iwaActivity = new TestWebappActivity();
++        iwaActivity.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId));
++        TestWebappActivity secondIwaActivity = new TestWebappActivity();
++        secondIwaActivity.setIntent(new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, appId));
++        TestWebappActivity otherIwaActivity = new TestWebappActivity();
++        otherIwaActivity.setIntent(
++                new Intent().putExtra(IwaLauncherActivity.EXTRA_APP_ID, "another-app"));
++        TestWebappActivity ordinaryWebapp = new TestWebappActivity();
++        ordinaryWebapp.setIntent(new Intent());
++
++        try {
++            ApplicationStatus.onStateChangeForTesting(iwaActivity, ActivityState.CREATED);
++            ApplicationStatus.onStateChangeForTesting(secondIwaActivity, ActivityState.CREATED);
++            ApplicationStatus.onStateChangeForTesting(otherIwaActivity, ActivityState.CREATED);
++            ApplicationStatus.onStateChangeForTesting(ordinaryWebapp, ActivityState.CREATED);
++            assertEquals(2, WebappActivity.getNumIwaWindowsForApp(appId));
++            assertEquals(1, WebappActivity.getNumIwaWindowsForApp("another-app"));
++
++            ApplicationStatus.onStateChangeForTesting(iwaActivity, ActivityState.STARTED);
++            ApplicationStatus.onStateChangeForTesting(iwaActivity, ActivityState.STOPPED);
++            assertEquals(2, WebappActivity.getNumIwaWindowsForApp(appId));
++        } finally {
++            ApplicationStatus.onStateChangeForTesting(iwaActivity, ActivityState.DESTROYED);
++            ApplicationStatus.onStateChangeForTesting(secondIwaActivity, ActivityState.DESTROYED);
++            ApplicationStatus.onStateChangeForTesting(otherIwaActivity, ActivityState.DESTROYED);
++            ApplicationStatus.onStateChangeForTesting(ordinaryWebapp, ActivityState.DESTROYED);
++        }
++        assertEquals(0, WebappActivity.getNumIwaWindowsForApp(appId));
++    }
++
+     private static class TestWebappActivity extends WebappActivity {
+         private BrowserServicesIntentDataProvider mMockIntentDataProvider;
+ 
+diff --git a/chrome/browser/web_applications/web_app_ui_manager_android.cc b/chrome/browser/web_applications/web_app_ui_manager_android.cc
+index 17d2613..9b0621e 100644
+--- a/chrome/browser/web_applications/web_app_ui_manager_android.cc
++++ b/chrome/browser/web_applications/web_app_ui_manager_android.cc
+@@ -10,12 +10,17 @@
+ #include <utility>
+ #include <vector>
+ 
++#include "base/android/jni_android.h"
++#include "base/android/jni_string.h"
+ #include "base/functional/callback.h"
+ #include "base/logging.h"
+ #include "base/values.h"
+ #include "components/webapps/browser/installable/ml_install_operation_tracker.h"
+ #include "third_party/blink/public/mojom/manifest/manifest.mojom.h"
+ 
++// Must come after headers that specialize FromJniType() / ToJniType().
++#include "chrome/android/chrome_jni_headers/WebappActivity_jni.h"
++
+ namespace web_app {
+ 
+ namespace {
+@@ -28,10 +33,11 @@ class AndroidWebAppUiManager final : public WebAppUiManager {
+   void Shutdown() override {}
+   WebAppUiManagerImpl* AsImpl() override { return nullptr; }
+ 
+-  // This manager cannot launch an app, so it has no app activity windows.
+-  // Replace these methods with real activity tracking before enabling launch.
++  // The app-ID-only shim launches WebappActivity directly. Query Android's
++  // non-destroyed activity registry so backgrounded windows still count.
+   size_t GetNumWindowsForApp(const webapps::AppId& app_id) override {
+-    return 0;
++    return Java_WebappActivity_getNumIwaWindowsForApp(
++        base::android::AttachCurrentThread(), app_id);
+   }
+   void CloseAppWindows(const webapps::AppId& app_id) override {}
+   void NotifyOnAllAppWindowsClosed(const webapps::AppId& app_id,

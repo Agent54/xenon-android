@@ -1,0 +1,5 @@
+# Experimental IWA port. The ordinary Android browser build stays separate.
+# Developer mode and unmanaged installs remain disabled unless a lab run
+# explicitly opts in with command-line feature flags.
+is_desktop_android = true
+chrome_public_manifest_package = "org.agent54.xenon.iwa"

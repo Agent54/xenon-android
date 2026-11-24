@@ -1,0 +1,14 @@
+--- a/chrome/browser/web_applications/web_app_command_scheduler.cc
++++ b/chrome/browser/web_applications/web_app_command_scheduler.cc
+@@ -926,7 +926,11 @@ void WebAppCommandScheduler::GarbageCollectStoragePartitions(
+ void WebAppCommandScheduler::GarbageCollectStoragePartitions(
+     base::OnceClosure callback,
+     const base::Location& location) {
++#if BUILDFLAG(IS_ANDROID)
++  std::move(callback).Run();
++#else
+   provider_->command_manager().ScheduleCommand(
+       std::make_unique<GarbageCollectStoragePartitionsCommand>(
+           &profile_.get(), base::DoNothing()));
++#endif  // BUILDFLAG(IS_ANDROID)
+ }

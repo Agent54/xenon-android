@@ -1,0 +1,119 @@
+--- a/chrome/browser/browser_process_impl.cc
++++ b/chrome/browser/browser_process_impl.cc
+@@ -466,7 +466,7 @@ void BrowserProcessImpl::Init() {
+   webapps::WebappsClientDesktop::CreateSingleton();
+ #endif
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   web_app::InitializeIsolatedWebAppRuntime(base::PassKey<BrowserProcessImpl>());
+ #endif
+ 
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -1551,7 +1551,7 @@ ChromeContentBrowserClient::ChromeContentBrowserClient() {
+       std::make_unique<android::ChromeContentBrowserClientGuestViewPart>());
+ #endif
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   extra_parts_.push_back(
+       std::make_unique<ChromeContentBrowserClientIsolatedWebAppsPart>());
+ #endif
+@@ -5099,10 +5099,10 @@ void ChromeContentBrowserClient::GetAdditionalAllowedSchemesForFileSystem(
+   additional_allowed_schemes->push_back(content::kChromeUIScheme);
+   additional_allowed_schemes->push_back(content::kChromeUIUntrustedScheme);
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   additional_allowed_schemes->push_back(webapps::kIsolatedAppScheme);
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   for (auto& extra_part : extra_parts_) {
+     extra_part->GetAdditionalAllowedSchemesForFileSystem(
+         additional_allowed_schemes);
+@@ -8667,12 +8667,12 @@ bool ChromeContentBrowserClient::IsFileSystemURLNavigationAllowed(
+ 
+ bool ChromeContentBrowserClient::AreIsolatedWebAppsEnabled(
+     content::BrowserContext* browser_context) {
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   return ChromeContentBrowserClientIsolatedWebAppsPart::
+       AreIsolatedWebAppsEnabled(browser_context);
+-#else  // BUILDFLAG(IS_ANDROID)
++#else
+   return false;
+-#endif
++#endif  // !BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_DESKTOP_ANDROID)
+ }
+ 
+ bool ChromeContentBrowserClient::AreDeprecatedAutomaticBeaconCredentialsAllowed(
+--- a/chrome/browser/web_applications/BUILD.gn
++++ b/chrome/browser/web_applications/BUILD.gn
+@@ -9,8 +9,8 @@ import("//testing/test.gni")
+ import("//testing/test.gni")
+ 
+ assert(!is_fuchsia, "Fuchsia shouldn't use anything in //chrome")
+-assert(!is_android,
+-       "Android shouldn't use anything in //chrome/web_applications")
++assert(!is_android || is_desktop_android,
++       "Only desktop Android should use //chrome/web_applications")
+ 
+ source_set("web_applications") {
+   sources = [
+--- a/chrome/renderer/chrome_content_renderer_client.cc
++++ b/chrome/renderer/chrome_content_renderer_client.cc
+@@ -187,10 +187,10 @@
+ #include "v8/include/v8-isolate.h"
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+ #include "components/webapps/isolated_web_apps/scheme.h"
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+ 
+ #if BUILDFLAG(IS_ANDROID)
+ #include "chrome/renderer/sandbox_status_extension_android.h"
+@@ -520,7 +520,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
+       WebString::FromAscii(chrome::kChromeSearchScheme));
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+   // IWAs can be enabled by either the feature flag or by enterprise
+   // policy. In either case the kEnableIsolatedWebAppsInRenderer flag is passed
+   // to the renderer process.
+@@ -540,7 +540,7 @@ void ChromeContentRendererClient::RenderThreadStarted() {
+         isolated_app_scheme);
+   }
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_DESKTOP_ANDROID)
+ 
+   // The Instant process can only display the content but not read it. Other
+   // processes can't display it or read it. (see http://crbug.com/40309067 for
+--- a/components/webapps/isolated_web_apps/BUILD.gn
++++ b/components/webapps/isolated_web_apps/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_chromeos || is_win || is_mac || is_linux,
++assert(is_chromeos || is_win || is_mac || is_linux || is_desktop_android,
+        "components/webapps/isolated_web_apps are no-op on Android or iOS.")
+ 
+ component("isolated_web_apps") {
+--- a/components/webapps/isolated_web_apps/test_support/BUILD.gn
++++ b/components/webapps/isolated_web_apps/test_support/BUILD.gn
+@@ -2,7 +2,7 @@
+ # Use of this source code is governed by a BSD-style license that can be
+ # found in the LICENSE file.
+ 
+-assert(is_chromeos || is_win || is_mac || is_linux,
++assert(is_chromeos || is_win || is_mac || is_linux || is_desktop_android,
+        "components/webapps/isolated_web_apps are no-op on Android or iOS.")
+ 
+ source_set("test_support") {

@@ -1,0 +1,14 @@
+--- a/chrome/browser/web_applications/preinstalled_web_app_manager.cc
++++ b/chrome/browser/web_applications/preinstalled_web_app_manager.cc
+@@ -813,7 +813,10 @@ void PreinstalledWebAppManager::OnExternalManagersSynchronized(
+ }
+ 
+ void PreinstalledWebAppManager::Load(ConsumeInstallOptions callback) {
+-  bool preinstalling_enabled =
++  bool preinstalling_enabled = false;
++#if !BUILDFLAG(IS_ANDROID)
++  preinstalling_enabled =
+       base::FeatureList::IsEnabled(features::kPreinstalledWebAppInstallation);
++#endif
+ 
+   if (!preinstalling_enabled) {

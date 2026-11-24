@@ -1,0 +1,11 @@
+--- a/chrome/browser/shortcuts/BUILD.gn
++++ b/chrome/browser/shortcuts/BUILD.gn
+@@ -4,7 +4,7 @@
+ 
+ import("//chrome/browser/buildflags.gni")
+ 
+-assert(!is_android)
++assert(!is_android || is_desktop_android)
+ 
+ source_set("shortcuts") {
+   public = [ "shortcut_icon_generator.h" ]
