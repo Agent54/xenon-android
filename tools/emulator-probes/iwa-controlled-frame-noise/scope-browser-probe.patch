@@ -1,0 +1,40 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -32,4 +32,5 @@
+ #include "base/i18n/character_encoding.h"
++#include "base/logging.h"
+ #include "base/memory/raw_ptr.h"
+ #include "base/memory/scoped_refptr.h"
+ #include "base/memory/self_deleting.h"
+@@ -9461,10 +9462,29 @@ ChromeContentBrowserClient::GetHeliumNoiseGuestScope(
+   // the browser-owned GuestView association for both implementations.
+   guest_view::GuestViewBase* guest =
+       guest_view::GuestViewBase::FromNavigationHandle(navigation_handle);
++  const bool probe_google =
++      navigation_handle->GetURL().host() == "www.google.com";
++  if (probe_google) {
++    LOG(ERROR) << "XENON_NOISE_SCOPE_ASSOC nav="
++               << navigation_handle->GetNavigationId()
++               << " guest=" << static_cast<bool>(guest)
++               << " attached=" << (guest && guest->attached())
++               << " owner=" << (guest && guest->owner_rfh())
++               << " controlled="
++               << (guest && guest->owner_rfh() &&
++                   guest->IsOwnedByControlledFrameEmbedder())
++               << " default_partition=" << guest_partition.is_default();
++  }
+   if (!guest || !guest->attached() || !guest->owner_rfh() ||
+       !guest->IsOwnedByControlledFrameEmbedder()) {
+     return std::nullopt;
+   }
+-  return controlled_frame::GetIwaControlledFrameNoiseScope(
++  auto scope = controlled_frame::GetIwaControlledFrameNoiseScope(
+       guest->owner_rfh()->GetLastCommittedOrigin(), guest_partition);
++  if (probe_google) {
++    LOG(ERROR) << "XENON_NOISE_SCOPE_RESULT nav="
++               << navigation_handle->GetNavigationId()
++               << " valid=" << scope.has_value();
++  }
++  return scope;
+ #else

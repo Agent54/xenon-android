@@ -1,0 +1,42 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -21,4 +21,5 @@
+ #include "base/check_op.h"
+ #include "base/command_line.h"
++#include "base/logging.h"
+ #include "base/containers/fixed_flat_map.h"
+ #include "base/containers/fixed_flat_set.h"
+@@ -9480,6 +9481,32 @@ bool ChromeContentBrowserClient::HeliumNoiseEnabled(
+     content::BrowserContext* browser_context,
+     const GURL& origin,
+     bool is_iwa_controlled_frame_guest) {
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // Disposable emulator-only browser policy probe. Never ship this switch.
++  const std::string mode = base::CommandLine::ForCurrentProcess()
++                               ->GetSwitchValueASCII("xenon-test-helium-noise-policy");
++  if (!mode.empty() && origin.SchemeIs("https") &&
++      origin.host() == "www.google.com") {
++    if (!is_iwa_controlled_frame_guest) {
++      if (mode == "block") {
++        helium_noise::SetHeliumNoiseEnabledForOrigin(browser_context, origin,
++                                                     false);
++      } else if (mode == "reset") {
++        helium_noise::SetHeliumNoiseEnabledForOrigin(browser_context, origin,
++                                                     true);
++      }
++    }
++    const bool enabled = is_iwa_controlled_frame_guest
++                             ? helium_noise::IsHeliumNoiseEnabledForIwaControlledFrame(
++                                   browser_context)
++                             : helium_noise::IsHeliumNoiseEnabled(browser_context,
++                                                                   origin);
++    LOG(ERROR) << "XENON_NOISE_POLICY mode=" << mode
++               << " guest=" << is_iwa_controlled_frame_guest
++               << " enabled=" << enabled;
++    return enabled;
++  }
++#endif
+   if (is_iwa_controlled_frame_guest) {
+     return helium_noise::IsHeliumNoiseEnabledForIwaControlledFrame(
+         browser_context);

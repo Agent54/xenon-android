@@ -32,3 +32,11 @@
 0031-launch-installed-iwa-from-app-id-shim.patch
 0032-count-live-android-iwa-activities.patch
 0033-use-dedicated-experimental-command-line-file.patch
+# Controlled Frame capability: separate from the core IWA port.
+0034-compile-controlled-frame-with-android-extension-core.patch
+0035-enable-controlled-frame-only-for-eligible-android-iwas.patch
+0036-preserve-controlled-frame-runtime-boundaries-on-android.patch
+# Controlled Frame privacy: owner/partition-scoped Helium noise policy and tokens.
+0055-isolate-helium-noise-in-android-controlled-frames.patch
+# Controlled Frame privacy: retain scoped tokens during pre-attach navigation.
+0056-scope-pre-attach-controlled-frame-noise.patch

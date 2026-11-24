@@ -1,0 +1,1 @@
+_ --enable-features=IsolatedWebApps,IsolatedWebAppDevMode --xenon-test-helium-noise-policy=observe

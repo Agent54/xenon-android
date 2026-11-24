@@ -1,0 +1,17 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -9461,7 +9461,12 @@ ChromeContentBrowserClient::GetHeliumNoiseGuestScope(
+   // the browser-owned GuestView association for both implementations.
+   guest_view::GuestViewBase* guest =
+       guest_view::GuestViewBase::FromNavigationHandle(navigation_handle);
+-  if (!guest || !guest->attached() || !guest->owner_rfh() ||
++  // A new WebView can reach ReadyToCommitNavigation before attachment finishes.
++  // Its browser-owned guest/owner association and the IWA partition are still
++  // available; requiring attached() here can silently reuse ordinary-site
++  // noise tokens for the first guest document.
++  if (!guest || guest->GetViewType() != extensions::WebViewGuest::Type ||
++      !guest->owner_rfh() ||
+       !guest->IsOwnedByControlledFrameEmbedder()) {
+     return std::nullopt;
+   }

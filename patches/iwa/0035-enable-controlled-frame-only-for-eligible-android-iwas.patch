@@ -1,0 +1,53 @@
+diff --git a/chrome/common/controlled_frame/controlled_frame.cc b/chrome/common/controlled_frame/controlled_frame.cc
+index b60aff5..e46d83e 100644
+--- a/chrome/common/controlled_frame/controlled_frame.cc
++++ b/chrome/common/controlled_frame/controlled_frame.cc
+@@ -21,10 +21,10 @@
+ #include "third_party/blink/public/common/features.h"
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+ #include "components/webapps/isolated_web_apps/scheme.h"
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+ 
+ static_assert(BUILDFLAG(ENABLE_EXTENSIONS_CORE));
+ 
+@@ -97,7 +97,7 @@ bool AvailabilityCheck(const std::string& api_full_name,
+   }
+ 
+ #if BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) || \
+-    BUILDFLAG(IS_CHROMEOS)
++    BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+   // Verify that the current context is an Isolated Web App and the API name is
+   // in our expected list.
+   return (extension == nullptr) && url.SchemeIs(webapps::kIsolatedAppScheme) &&
+@@ -105,10 +105,10 @@ bool AvailabilityCheck(const std::string& api_full_name,
+          context_data.HasControlledFrameCapability() &&
+          std::ranges::contains(GetControlledFrameFeatureList(), api_full_name);
+ #else   // !(BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS))
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS))
+   return false;
+ #endif  // BUILDFLAG(IS_WIN) || BUILDFLAG(IS_MAC) || BUILDFLAG(IS_LINUX) ||
+-        // BUILDFLAG(IS_CHROMEOS)
++        // BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(ENABLE_DESKTOP_ANDROID_EXTENSIONS)
+ }
+ 
+ extensions::Feature::FeatureDelegatedAvailabilityCheckMap
+diff --git a/extensions/common/api/_api_features.json b/extensions/common/api/_api_features.json
+index fa5b150..814eac3 100644
+--- a/extensions/common/api/_api_features.json
++++ b/extensions/common/api/_api_features.json
+@@ -303,8 +303,7 @@
+       // This feature is only enabled if the embedder's delegated check returns
+       // true.
+       "requires_delegated_availability_check": true,
+-      // "desktop_android" is not supported.
+-      "platforms": ["chromeos", "linux", "mac", "win"]
++      "platforms": ["chromeos", "desktop_android", "linux", "mac", "win"]
+     }
+   ],
+   "hid": {

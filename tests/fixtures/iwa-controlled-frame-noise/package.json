@@ -1,0 +1,12 @@
+{
+  "name": "iwa-controlled-frame-noise",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "wbn": "0.0.9",
+    "wbn-sign": "0.3.1"
+  }
+}

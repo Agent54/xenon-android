@@ -1,0 +1,590 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -78,4 +78,7 @@
+ #include "chrome/browser/chrome_content_browser_client_parts.h"
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++#include "chrome/browser/controlled_frame/controlled_frame_noise_scope.h"
++#endif
+ #include "chrome/browser/content_settings/cookie_settings_factory.h"
+ #include "chrome/browser/content_settings/host_content_settings_map_factory.h"
+ #include "chrome/browser/contextual_tasks/contextual_tasks_ui_service.h"
+@@ -9449,12 +9452,37 @@
+     return last_replaced_data.GetAvailableTypes();
+   }
+ 
++  return std::nullopt;
++}
++
++std::optional<std::string>
++ChromeContentBrowserClient::GetHeliumNoiseGuestScope(
++    content::NavigationHandle* navigation_handle,
++    const content::StoragePartitionConfig& guest_partition) {
++#if BUILDFLAG(IS_DESKTOP_ANDROID)
++  // A legacy GuestView has a primary main frame, not kGuestMainFrame. Resolve
++  // the browser-owned GuestView association for both implementations.
++  guest_view::GuestViewBase* guest =
++      guest_view::GuestViewBase::FromNavigationHandle(navigation_handle);
++  if (!guest || !guest->attached() || !guest->owner_rfh() ||
++      !guest->IsOwnedByControlledFrameEmbedder()) {
++    return std::nullopt;
++  }
++  return controlled_frame::GetIwaControlledFrameNoiseScope(
++      guest->owner_rfh()->GetLastCommittedOrigin(), guest_partition);
++#else
+   return std::nullopt;
++#endif
+ }
+ 
+ bool ChromeContentBrowserClient::HeliumNoiseEnabled(
+     content::BrowserContext* browser_context,
+-    const GURL& origin) {
++    const GURL& origin,
++    bool is_iwa_controlled_frame_guest) {
++  if (is_iwa_controlled_frame_guest) {
++    return helium_noise::IsHeliumNoiseEnabledForIwaControlledFrame(
++        browser_context);
++  }
+   return helium_noise::IsHeliumNoiseEnabled(browser_context, origin);
+ }
+ 
+diff --git a/chrome/browser/chrome_content_browser_client.h b/chrome/browser/chrome_content_browser_client.h
+--- a/chrome/browser/chrome_content_browser_client.h
++++ b/chrome/browser/chrome_content_browser_client.h
+@@ -1203,8 +1203,12 @@
+   std::optional<std::vector<std::u16string>> GetClipboardTypesIfPolicyApplied(
+       const ui::ClipboardSequenceNumberToken& seqno) override;
+ 
++  std::optional<std::string> GetHeliumNoiseGuestScope(
++      content::NavigationHandle* navigation_handle,
++      const content::StoragePartitionConfig& guest_partition) override;
+   bool HeliumNoiseEnabled(content::BrowserContext* browser_context,
+-                          const GURL& origin) override;
++                          const GURL& origin,
++                          bool is_iwa_controlled_frame_guest) override;
+ 
+   bool UsePrefetchPrerenderIntegration() override;
+ 
+diff --git a/chrome/browser/controlled_frame/BUILD.gn b/chrome/browser/controlled_frame/BUILD.gn
+--- a/chrome/browser/controlled_frame/BUILD.gn
++++ b/chrome/browser/controlled_frame/BUILD.gn
+@@ -4,6 +4,7 @@
+ 
+ import("//build/config/chromeos/args.gni")
+ import("//extensions/buildflags/buildflags.gni")
++import("//testing/test.gni")
+ 
+ assert(enable_extensions_core)
+ 
+@@ -38,8 +39,38 @@
+   ]
+ 
+   public_deps = [ "//chrome/browser/controlled_frame/api:api_registration" ]
++
++  if (is_desktop_android) {
++    sources += [
++      "controlled_frame_noise_scope.cc",
++      "controlled_frame_noise_scope.h",
++    ]
++    deps += [
++      "//components/webapps/isolated_web_apps",
++      "//content/public/browser",
++    ]
++  }
+ }
+ 
++if (is_desktop_android) {
++  test("controlled_frame_noise_scope_unittests") {
++    sources = [
++      "controlled_frame_noise_scope.cc",
++      "controlled_frame_noise_scope_unittest.cc",
++    ]
++    deps = [
++      "//base",
++      "//base/test:run_all_unittests",
++      "//base/test:test_support",
++      "//components/webapps/isolated_web_apps",
++      "//content/public/browser",
++      "//testing/android/native_test:native_test_native_code",
++      "//testing/gtest",
++      "//url",
++    ]
++  }
++}
++
+ source_set("media_access_handler") {
+   sources = [ "controlled_frame_media_access_handler.h" ]
+   public_deps = [ "//chrome/browser/media:access_handler" ]
+diff --git a/chrome/browser/controlled_frame/controlled_frame_noise_scope.cc b/chrome/browser/controlled_frame/controlled_frame_noise_scope.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/controlled_frame/controlled_frame_noise_scope.cc
+@@ -0,0 +1,44 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/controlled_frame/controlled_frame_noise_scope.h"
++
++#include <string>
++#include <string_view>
++
++#include "components/webapps/isolated_web_apps/types/iwa_origin.h"
++#include "content/public/browser/storage_partition_config.h"
++#include "url/origin.h"
++
++namespace controlled_frame {
++
++std::optional<std::string> GetIwaControlledFrameNoiseScope(
++    const url::Origin& embedder_origin,
++    const content::StoragePartitionConfig& guest_partition) {
++  const auto owner = web_app::IwaOrigin::Create(embedder_origin.GetURL());
++  if (!owner || guest_partition.is_default() ||
++      guest_partition.partition_domain() != owner->GetPartitionDomain() ||
++      (guest_partition.partition_name().empty() &&
++       !guest_partition.in_memory())) {
++    return std::nullopt;
++  }
++
++  // Length-prefix strings so a partition name cannot collide with another
++  // owner, name, or persistence mode when the scope is hashed.
++  std::string scope;
++  auto append_field = [&scope](std::string_view value) {
++    scope.append(std::to_string(value.size()));
++    scope.push_back(':');
++    scope.append(value);
++  };
++  append_field(embedder_origin.Serialize());
++  append_field(guest_partition.partition_domain());
++  append_field(guest_partition.partition_name());
++  append_field(guest_partition.in_memory() ? "memory" : "persistent");
++  append_field(std::to_string(static_cast<int>(
++      guest_partition.fallback_to_partition_domain_for_blob_urls())));
++  return scope;
++}
++
++}  // namespace controlled_frame
+diff --git a/chrome/browser/controlled_frame/controlled_frame_noise_scope.h b/chrome/browser/controlled_frame/controlled_frame_noise_scope.h
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/controlled_frame/controlled_frame_noise_scope.h
+@@ -0,0 +1,30 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#ifndef CHROME_BROWSER_CONTROLLED_FRAME_CONTROLLED_FRAME_NOISE_SCOPE_H_
++#define CHROME_BROWSER_CONTROLLED_FRAME_CONTROLLED_FRAME_NOISE_SCOPE_H_
++
++#include <optional>
++#include <string>
++
++namespace content {
++class StoragePartitionConfig;
++}  // namespace content
++
++namespace url {
++class Origin;
++}  // namespace url
++
++namespace controlled_frame {
++
++// Caller must supply the browser-owned embedder origin and prospective guest
++// partition after verifying a Controlled Frame guest association. Returns a
++// stable scope only if the partition belongs to the IWA embedder.
++std::optional<std::string> GetIwaControlledFrameNoiseScope(
++    const url::Origin& embedder_origin,
++    const content::StoragePartitionConfig& guest_partition);
++
++}  // namespace controlled_frame
++
++#endif  // CHROME_BROWSER_CONTROLLED_FRAME_CONTROLLED_FRAME_NOISE_SCOPE_H_
+diff --git a/chrome/browser/controlled_frame/controlled_frame_noise_scope_unittest.cc b/chrome/browser/controlled_frame/controlled_frame_noise_scope_unittest.cc
+new file mode 100644
+--- /dev/null
++++ b/chrome/browser/controlled_frame/controlled_frame_noise_scope_unittest.cc
+@@ -0,0 +1,96 @@
++// Copyright 2026 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++#include "chrome/browser/controlled_frame/controlled_frame_noise_scope.h"
++
++#include <string>
++
++#include "components/web_package/signed_web_bundles/signed_web_bundle_id.h"
++#include "components/webapps/isolated_web_apps/scheme.h"
++#include "components/webapps/isolated_web_apps/types/iwa_origin.h"
++#include "content/public/browser/storage_partition_config.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++#include "url/origin.h"
++#include "url/url_util.h"
++
++namespace content {
++StoragePartitionConfig CreateStoragePartitionConfigForTesting(
++    bool in_memory,
++    const std::string& partition_domain,
++    const std::string& partition_name) {
++  return StoragePartitionConfig(partition_domain, partition_name, in_memory);
++}
++}  // namespace content
++
++namespace controlled_frame {
++namespace {
++
++web_app::IwaOrigin GetIwaOrigin(const char* host) {
++  return web_app::IwaOrigin(
++      web_package::SignedWebBundleId::Create(host).value());
++}
++
++class ControlledFrameNoiseScopeTest : public testing::Test {
++ public:
++  void SetUp() override {
++    url::AddStandardScheme(webapps::kIsolatedAppScheme,
++                           url::SCHEME_WITH_HOST);
++  }
++
++ private:
++  url::ScopedSchemeRegistryForTests scoped_scheme_registry_;
++};
++
++TEST_F(ControlledFrameNoiseScopeTest, RequiresOwningIwaPartition) {
++  const web_app::IwaOrigin owner = GetIwaOrigin(
++      "b7looprugym3zyxqffzqdz4mzc2vz4j6ge3arxg2ybbzwgb6ne2qaaic");
++  const web_app::IwaOrigin other = GetIwaOrigin(
++      "c6mopl2f4c2y7oha7vlvgjvtcwwvvvuk6odzcnojijcfpzyaa2oaaaic");
++  const auto parsed_owner = web_app::IwaOrigin::Create(owner.origin().GetURL());
++  ASSERT_TRUE(parsed_owner) << parsed_owner.error();
++  const auto guest_x = content::CreateStoragePartitionConfigForTesting(
++      false, owner.GetPartitionDomain(), "x");
++  const auto guest_y = content::CreateStoragePartitionConfigForTesting(
++      false, owner.GetPartitionDomain(), "y");
++  const auto guest_x_memory = content::CreateStoragePartitionConfigForTesting(
++      true, owner.GetPartitionDomain(), "x");
++  const auto unnamed_memory = content::CreateStoragePartitionConfigForTesting(
++      true, owner.GetPartitionDomain(), "");
++  auto guest_x_with_fallback = guest_x;
++  guest_x_with_fallback.set_fallback_to_partition_domain_for_blob_urls(
++      content::StoragePartitionConfig::FallbackMode::
++          kFallbackPartitionOnDisk);
++  const auto other_guest = content::CreateStoragePartitionConfigForTesting(
++      false, other.GetPartitionDomain(), "x");
++  const auto base_app = content::CreateStoragePartitionConfigForTesting(
++      false, owner.GetPartitionDomain(), "");
++  const auto default_partition =
++      content::CreateStoragePartitionConfigForTesting(false, "", "");
++
++  const auto scope_x =
++      GetIwaControlledFrameNoiseScope(owner.origin(), guest_x);
++  ASSERT_TRUE(scope_x);
++  EXPECT_EQ(scope_x, GetIwaControlledFrameNoiseScope(owner.origin(), guest_x));
++  EXPECT_NE(scope_x, GetIwaControlledFrameNoiseScope(owner.origin(), guest_y));
++  EXPECT_NE(scope_x,
++            GetIwaControlledFrameNoiseScope(owner.origin(), guest_x_memory));
++  EXPECT_NE(scope_x, GetIwaControlledFrameNoiseScope(
++                         owner.origin(), guest_x_with_fallback));
++  EXPECT_TRUE(
++      GetIwaControlledFrameNoiseScope(owner.origin(), unnamed_memory));
++  EXPECT_FALSE(GetIwaControlledFrameNoiseScope(owner.origin(), other_guest));
++  EXPECT_FALSE(GetIwaControlledFrameNoiseScope(owner.origin(), base_app));
++  EXPECT_FALSE(
++      GetIwaControlledFrameNoiseScope(owner.origin(), default_partition));
++  EXPECT_FALSE(GetIwaControlledFrameNoiseScope(
++      url::Origin::Create(GURL("https://example.test/")), guest_x));
++  const auto other_scope =
++      GetIwaControlledFrameNoiseScope(other.origin(), other_guest);
++  EXPECT_TRUE(other_scope);
++  EXPECT_NE(scope_x, other_scope);
++}
++
++}  // namespace
++}  // namespace controlled_frame
+diff --git a/chrome/browser/helium_noise/helium_noise_settings.cc b/chrome/browser/helium_noise/helium_noise_settings.cc
+--- a/chrome/browser/helium_noise/helium_noise_settings.cc
++++ b/chrome/browser/helium_noise/helium_noise_settings.cc
+@@ -70,6 +70,15 @@
+          HeliumNoiseState::kEnabled;
+ }
+ 
++bool IsHeliumNoiseEnabledForIwaControlledFrame(
++    content::BrowserContext* browser_context) {
++  if (!base::FeatureList::IsEnabled(blink::features::kHeliumNoise)) {
++    return false;
++  }
++  Profile* profile = GetProfile(browser_context);
++  return profile && profile->GetPrefs()->GetBoolean(prefs::kHeliumNoiseEnabled);
++}
++
+ bool CanSetHeliumNoiseForOrigin(const GURL& url) {
+   return url.is_valid() && url.SchemeIsHTTPOrHTTPS() &&
+          !url::Origin::Create(url).opaque();
+diff --git a/chrome/browser/helium_noise/helium_noise_settings.h b/chrome/browser/helium_noise/helium_noise_settings.h
+--- a/chrome/browser/helium_noise/helium_noise_settings.h
++++ b/chrome/browser/helium_noise/helium_noise_settings.h
+@@ -27,6 +27,11 @@
+ bool IsHeliumNoiseEnabled(content::BrowserContext* browser_context,
+                           const GURL& url);
+ 
++// Controlled Frame guests inherit the global privacy-noise preference, but
++// not an ordinary profile site exception for the same HTTP(S) URL.
++bool IsHeliumNoiseEnabledForIwaControlledFrame(
++    content::BrowserContext* browser_context);
++
+ bool CanSetHeliumNoiseForOrigin(const GURL& url);
+ 
+ void SetHeliumNoiseEnabledForOrigin(content::BrowserContext* browser_context,
+diff --git a/content/browser/BUILD.gn b/content/browser/BUILD.gn
+--- a/content/browser/BUILD.gn
++++ b/content/browser/BUILD.gn
+@@ -25,12 +25,31 @@
+ import("//services/device/public/cpp/compute_pressure/buildflags.gni")
+ import("//services/network/public/cpp/features.gni")
+ import("//testing/libfuzzer/fuzzer_test.gni")
++import("//testing/test.gni")
+ import("//third_party/blink/public/public_features.gni")
+ import("//tools/ipc_fuzzer/ipc_fuzzer.gni")
+ 
+ if (is_mac) {
+   import("//content/public/app/mac_helpers.gni")
+ }
++
++if (is_desktop_android) {
++  test("helium_noise_token_unittests") {
++    sources = [
++      "helium_noise/noise_token_data.cc",
++      "helium_noise/noise_token_data_unittest.cc",
++    ]
++    deps = [
++      "//base",
++      "//base/test:run_all_unittests",
++      "//base/test:test_support",
++      "//crypto",
++      "//testing/android/native_test:native_test_native_code",
++      "//testing/gtest",
++      "//url",
++    ]
++  }
++}
+ if (is_android) {
+   import("//third_party/jni_zero/jni_zero.gni")
+ 
+diff --git a/content/browser/helium_noise/noise_token_data.cc b/content/browser/helium_noise/noise_token_data.cc
+--- a/content/browser/helium_noise/noise_token_data.cc
++++ b/content/browser/helium_noise/noise_token_data.cc
+@@ -18,7 +18,6 @@
+ #include "base/numerics/byte_conversions.h"
+ #include "base/rand_util.h"
+ #include "base/unguessable_token.h"
+-#include "content/public/browser/browser_context.h"
+ #include "crypto/hash.h"
+ #include "url/origin.h"
+ 
+@@ -65,7 +64,7 @@
+ 
+ // static
+ HeliumNoiseTokenData* HeliumNoiseTokenData::GetBrowserTokens(
+-    BrowserContext* context) {
++    base::SupportsUserData* context) {
+   HeliumNoiseTokenData* data = static_cast<HeliumNoiseTokenData*>(
+       context->GetUserData(&kBrowserContextNoiseTokenKeys));
+ 
+@@ -78,13 +77,21 @@
+ 
+ // static
+ blink::HeliumNoiseTokenMap HeliumNoiseTokenData::GetTokens(
+-    BrowserContext* context,
+-    const url::Origin& origin) {
++    base::SupportsUserData* context,
++    const url::Origin& origin,
++    std::string_view guest_partition_scope) {
+   HeliumNoiseTokenData* data = GetBrowserTokens(context);
+ 
+   std::string domain = !origin.opaque()
+                           ? origin.Serialize()
+                           : base::UnguessableToken::Create().ToString();
++  if (!guest_partition_scope.empty()) {
++    // A leading NUL cannot occur in a serialized origin. The second NUL
++    // separates the origin from the browser-validated guest identity.
++    domain.insert(domain.begin(), '\0');
++    domain.push_back('\0');
++    domain.append(guest_partition_scope);
++  }
+ 
+   blink::HeliumNoiseTokenMap result;
+   for (const auto& [feature, session_token] : data->session_tokens_) {
+@@ -96,7 +103,7 @@
+ 
+ // static
+ HeliumNoiseTokenData* HeliumNoiseTokenData::RegenerateTokens(
+-    BrowserContext* context) {
++    base::SupportsUserData* context) {
+   auto new_data = std::make_unique<HeliumNoiseTokenData>();
+   HeliumNoiseTokenData* result = new_data.get();
+   context->SetUserData(&kBrowserContextNoiseTokenKeys,
+diff --git a/content/browser/helium_noise/noise_token_data.h b/content/browser/helium_noise/noise_token_data.h
+--- a/content/browser/helium_noise/noise_token_data.h
++++ b/content/browser/helium_noise/noise_token_data.h
+@@ -9,6 +9,8 @@
+ #ifndef CONTENT_BROWSER_HELIUM_NOISE_NOISE_TOKEN_DATA_H_
+ #define CONTENT_BROWSER_HELIUM_NOISE_NOISE_TOKEN_DATA_H_
+ 
++#include <string_view>
++
+ #include "base/containers/flat_map.h"
+ #include "base/supports_user_data.h"
+ #include "content/common/content_export.h"
+@@ -20,8 +22,6 @@
+ 
+ namespace content {
+ 
+-class BrowserContext;
+-
+ // A user data class that generates and stores BrowserContext-associated noise
+ // tokens used for noising fingerprintable data.
+ class CONTENT_EXPORT HeliumNoiseTokenData
+@@ -31,17 +31,22 @@
+ 
+   // Gets a map of BrowserContext-associated & feature-specific noise tokens
+   // computed with the main frame's origin. If the origin is opaque, a random
+-  // value will be used instead.
+-  static blink::HeliumNoiseTokenMap GetTokens(BrowserContext* context,
+-                                              const url::Origin& origin);
++  // value will be used instead. A nonempty guest_partition_scope must come
++  // from a browser-validated owning app and full guest partition identity;
++  // the empty scope preserves ordinary-tab token derivation.
++  static blink::HeliumNoiseTokenMap GetTokens(
++      base::SupportsUserData* context,
++      const url::Origin& origin,
++      std::string_view guest_partition_scope = {});
+ 
+   // Regenerates all noise tokens, returning a HeliumNoiseTokenData instance.
+-  static HeliumNoiseTokenData* RegenerateTokens(BrowserContext* context);
++  static HeliumNoiseTokenData* RegenerateTokens(
++      base::SupportsUserData* context);
+ 
+  private:
+   // Helper to get or create HeliumNoiseTokenData for a BrowserContext.
+   static HeliumNoiseTokenData* GetBrowserTokens(
+-      BrowserContext* context);
++      base::SupportsUserData* context);
+ 
+   // Map of noise tokens per feature for a BrowserContext.
+   base::flat_map<blink::HeliumNoiseFeature, blink::HeliumNoiseToken>
+diff --git a/content/browser/helium_noise/noise_token_data_unittest.cc b/content/browser/helium_noise/noise_token_data_unittest.cc
+new file mode 100644
+--- /dev/null
++++ b/content/browser/helium_noise/noise_token_data_unittest.cc
+@@ -0,0 +1,42 @@
++// Copyright 2026 The Helium Authors
++// You can use, redistribute, and/or modify this source code under
++// the terms of the GPL-3.0 license that can be found in the LICENSE file.
++
++#include "content/browser/helium_noise/noise_token_data.h"
++
++#include "base/supports_user_data.h"
++#include "testing/gtest/include/gtest/gtest.h"
++#include "url/gurl.h"
++#include "url/origin.h"
++
++namespace content {
++namespace {
++
++class NoiseTokenHost : public base::SupportsUserData {
++ public:
++  ~NoiseTokenHost() override = default;
++};
++
++TEST(HeliumNoiseTokenDataTest, SameOriginGuestPartitionsHaveDistinctTokens) {
++  NoiseTokenHost host;
++  const url::Origin origin =
++      url::Origin::Create(GURL("https://example.test/"));
++
++  const auto ordinary = HeliumNoiseTokenData::GetTokens(&host, origin);
++  const auto guest_a = HeliumNoiseTokenData::GetTokens(
++      &host, origin, "iwa-one/persistent/partition-a");
++  const auto guest_a_repeat = HeliumNoiseTokenData::GetTokens(
++      &host, origin, "iwa-one/persistent/partition-a");
++  const auto guest_b = HeliumNoiseTokenData::GetTokens(
++      &host, origin, "iwa-one/persistent/partition-b");
++  const auto other_iwa = HeliumNoiseTokenData::GetTokens(
++      &host, origin, "iwa-two/persistent/partition-a");
++
++  EXPECT_EQ(guest_a, guest_a_repeat);
++  EXPECT_FALSE(ordinary == guest_a);
++  EXPECT_FALSE(guest_a == guest_b);
++  EXPECT_FALSE(guest_a == other_iwa);
++}
++
++}  // namespace
++}  // namespace content
+diff --git a/content/browser/renderer_host/navigation_request.cc b/content/browser/renderer_host/navigation_request.cc
+--- a/content/browser/renderer_host/navigation_request.cc
++++ b/content/browser/renderer_host/navigation_request.cc
+@@ -9854,10 +9854,16 @@
+   if (IsInMainFrame()) {
+     BrowserContext* browser_context =
+         frame_tree_node()->navigator().controller().GetBrowserContext();
+-    if (GetContentClient()->browser()->HeliumNoiseEnabled(
+-            browser_context, origin_to_commit->GetURL())) {
++    ContentBrowserClient* browser_client = GetContentClient()->browser();
++    const std::optional<std::string> guest_scope =
++        browser_client->GetHeliumNoiseGuestScope(
++            this, site_info_.GetStoragePartitionConfig());
++    if (browser_client->HeliumNoiseEnabled(
++            browser_context, origin_to_commit->GetURL(),
++            guest_scope.has_value())) {
+       noise_tokens_ = HeliumNoiseTokenData::GetTokens(
+-          browser_context, origin_to_commit.value());
++          browser_context, origin_to_commit.value(),
++          guest_scope.value_or(std::string()));
+     }
+   }
+ 
+diff --git a/content/public/browser/content_browser_client.cc b/content/public/browser/content_browser_client.cc
+--- a/content/public/browser/content_browser_client.cc
++++ b/content/public/browser/content_browser_client.cc
+@@ -1992,9 +1992,16 @@
+   return std::nullopt;
+ }
+ 
++std::optional<std::string> ContentBrowserClient::GetHeliumNoiseGuestScope(
++    NavigationHandle* navigation_handle,
++    const StoragePartitionConfig& guest_partition) {
++  return std::nullopt;
++}
++
+ bool ContentBrowserClient::HeliumNoiseEnabled(
+     BrowserContext* browser_context,
+-    const GURL& origin) {
++    const GURL& origin,
++    bool is_iwa_controlled_frame_guest) {
+   return base::FeatureList::IsEnabled(blink::features::kHeliumNoise);
+ }
+ 
+diff --git a/content/public/browser/content_browser_client.h b/content/public/browser/content_browser_client.h
+--- a/content/public/browser/content_browser_client.h
++++ b/content/public/browser/content_browser_client.h
+@@ -3255,10 +3255,19 @@
+   GetClipboardTypesIfPolicyApplied(
+       const ui::ClipboardSequenceNumberToken& seqno);
+ 
+-  // Returns true if HeliumNoise should be enabled for `origin`'s navigation.
+-  // Enabled by default, can be disabled via blink::features::kHeliumNoise.
++  // Returns a browser-validated IWA Controlled Frame guest scope, or nullopt
++  // for ordinary pages and other guest types. The navigation is required to
++  // resolve legacy GuestView WebContents as well as MPArch guest main frames.
++  // The caller supplies the prospective storage partition at ReadyToCommit.
++  virtual std::optional<std::string> GetHeliumNoiseGuestScope(
++      NavigationHandle* navigation_handle,
++      const StoragePartitionConfig& guest_partition);
++
++  // Returns true if HeliumNoise should be enabled for `origin`'s navigation.
++  // Guest identity must come from GetHeliumNoiseGuestScope, not the renderer.
+   virtual bool HeliumNoiseEnabled(BrowserContext* browser_context,
+-                                  const GURL& origin);
++                                  const GURL& origin,
++                                  bool is_iwa_controlled_frame_guest);
+ 
+   // Returns true if PrefetchPrerenderIntegration should be allowed, this
+   // allows a prerender fall back to prefetch if available.

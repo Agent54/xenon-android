@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
+--- a/chrome/browser/chrome_content_browser_client.cc
++++ b/chrome/browser/chrome_content_browser_client.cc
+@@ -9478,4 +9478,7 @@ ChromeContentBrowserClient::GetHeliumNoiseGuestScope(
+-  if (!guest || !guest->attached() || !guest->owner_rfh() ||
++  // ReadyToCommitNavigation may precede the WebView's completed attachment.
++  // Keep the browser-owned guest and owning IWA/partition validation.
++  if (!guest || guest->GetViewType() != extensions::WebViewGuest::Type ||
++      !guest->owner_rfh() ||
+       !guest->IsOwnedByControlledFrameEmbedder()) {
+     return std::nullopt;
+   }

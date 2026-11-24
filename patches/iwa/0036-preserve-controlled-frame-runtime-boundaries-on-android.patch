@@ -1,0 +1,264 @@
+diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
+index f46b7fc..f2d204a 100644
+--- a/chrome/browser/BUILD.gn
++++ b/chrome/browser/BUILD.gn
+@@ -3277,7 +3277,10 @@ source_set("browser") {
+   # block with the `enable_extensions` block above.
+   if (enable_desktop_android_extensions) {
+     public_deps += [ "//chrome/browser/controlled_frame" ]
+-    deps += [ "//chrome/browser/ui/android/extensions" ]
++    deps += [
++      "//chrome/browser/controlled_frame:media_access_handler_impl",
++      "//chrome/browser/ui/android/extensions",
++    ]
+   }
+ 
+   if (enable_library_cdms) {
+diff --git a/chrome/browser/extensions/BUILD.gn b/chrome/browser/extensions/BUILD.gn
+index 755d464..864f2b0 100644
+--- a/chrome/browser/extensions/BUILD.gn
++++ b/chrome/browser/extensions/BUILD.gn
+@@ -1866,10 +1866,12 @@ source_set("chrome_extensions_browser_client") {
+       "//chrome/browser/extensions/api/runtime",
+       "//chrome/browser/profiles",
+       "//chrome/browser/ui/webui/devtools",
++      "//chrome/browser/web_applications",
+       "//chrome/common",
+       "//components/signin/core/browser",
+       "//components/update_client",
+       "//components/version_info",
++      "//components/webapps/isolated_web_apps",
+       "//extensions/browser",
+       "//extensions/browser/kiosk",
+     ]
+diff --git a/chrome/browser/extensions/chrome_extensions_browser_client.h b/chrome/browser/extensions/chrome_extensions_browser_client.h
+index 0ae07d8..3189579 100644
+--- a/chrome/browser/extensions/chrome_extensions_browser_client.h
++++ b/chrome/browser/extensions/chrome_extensions_browser_client.h
+@@ -269,11 +269,6 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
+       content::BrowserContext* context) override;
+   bool HasControlledFrameCapability(content::BrowserContext* context,
+                                     const GURL& url) override;
+-
+-// On Android, we rely on the stub implementations in ExtensionsBrowserClient
+-// for these methods, so we cannot declare them here (otherwise the linker
+-// sees them as un-implemented).
+-#if BUILDFLAG(ENABLE_EXTENSIONS)
+   void CleanUpWebView(content::BrowserContext* browser_context,
+                       int embedder_process_id,
+                       int view_instance_id) override;
+@@ -284,6 +279,11 @@ class ChromeExtensionsBrowserClient : public ExtensionsBrowserClient {
+       bool in_memory,
+       base::OnceCallback<void(std::optional<content::StoragePartitionConfig>)>
+           callback) override;
++
++// On Android, we rely on the stub implementations in ExtensionsBrowserClient
++// for these methods, so we cannot declare them here (otherwise the linker
++// sees them as un-implemented).
++#if BUILDFLAG(ENABLE_EXTENSIONS)
+   custom_handlers::ProtocolHandlerRegistry* GetProtocolHandlerRegistry(
+       content::BrowserContext* context) override;
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+diff --git a/chrome/browser/extensions/chrome_extensions_browser_client_android.cc b/chrome/browser/extensions/chrome_extensions_browser_client_android.cc
+index baee550..00933f5 100644
+--- a/chrome/browser/extensions/chrome_extensions_browser_client_android.cc
++++ b/chrome/browser/extensions/chrome_extensions_browser_client_android.cc
+@@ -8,12 +8,21 @@
+ #include <utility>
+ 
+ #include "chrome/browser/extensions/error_console/error_console.h"
++#include "chrome/browser/extensions/menu_manager.h"
+ #include "chrome/browser/extensions/user_script_listener.h"
++#include "chrome/browser/profiles/profile.h"
+ #include "chrome/browser/ui/webui/devtools/devtools_ui.h"
++#include "chrome/browser/web_applications/isolated_web_apps/isolated_web_app_url_info.h"
++#include "chrome/browser/web_applications/web_app_command_scheduler.h"
++#include "chrome/browser/web_applications/web_app_provider.h"
++#include "components/webapps/isolated_web_apps/scheme.h"
++#include "components/webapps/isolated_web_apps/url_loading/url_loader_factory.h"
+ #include "content/public/browser/browser_context.h"
+ #include "content/public/browser/browser_task_traits.h"
+ #include "content/public/browser/browser_thread.h"
+ #include "content/public/browser/render_frame_host.h"
++#include "content/public/browser/security_principal.h"
++#include "content/public/browser/site_instance.h"
+ #include "extensions/browser/event_router.h"
+ #include "extensions/browser/extension_error.h"
+ #include "extensions/browser/extension_web_contents_observer.h"
+@@ -23,6 +32,7 @@
+ #include "extensions/browser/url_request_util.h"
+ #include "extensions/common/features/feature_channel.h"
+ #include "google_apis/gaia/gaia_urls.h"
++#include "ipc/constants.mojom.h"
+ #include "services/network/public/mojom/url_loader.mojom.h"
+ 
+ using content::BrowserContext;
+@@ -85,7 +95,53 @@ ChromeExtensionsBrowserClient::GetControlledFrameEmbedderURLLoader(
+     const url::Origin& app_origin,
+     content::FrameTreeNodeId frame_tree_node_id,
+     content::BrowserContext* browser_context) {
+-  return mojo::PendingRemote<network::mojom::URLLoaderFactory>();
++  if (app_origin.scheme() != webapps::kIsolatedAppScheme) {
++    return {};
++  }
++  return web_app::IsolatedWebAppURLLoaderFactory::CreateForFrame(
++      browser_context, app_origin, frame_tree_node_id,
++      /*enforce_same_origin=*/true);
++}
++
++void ChromeExtensionsBrowserClient::CleanUpWebView(
++    content::BrowserContext* browser_context,
++    int embedder_process_id,
++    int view_instance_id) {
++  auto* menu_manager = MenuManager::Get(browser_context);
++  if (!menu_manager) {
++    return;
++  }
++  menu_manager->RemoveAllContextItems(MenuItem::ExtensionKey(
++      "", embedder_process_id,
++      /*webview_embedder_frame_id=*/IPC::mojom::kRoutingIdNone,
++      view_instance_id));
++}
++
++void ChromeExtensionsBrowserClient::GetWebViewStoragePartitionConfig(
++    content::BrowserContext* browser_context,
++    content::SiteInstance* owner_site_instance,
++    const std::string& partition_name,
++    bool in_memory,
++    base::OnceCallback<void(std::optional<content::StoragePartitionConfig>)>
++        callback) {
++  if (owner_site_instance->GetSecurityPrincipal().SchemeIs(
++          webapps::kIsolatedAppScheme)) {
++    auto url_info = web_app::IsolatedWebAppUrlInfo::CreateFromHost(
++        owner_site_instance->GetSecurityPrincipal().GetHost());
++    auto* provider = web_app::WebAppProvider::GetForWebApps(
++        Profile::FromBrowserContext(browser_context));
++    if (!url_info.has_value() || !provider) {
++      std::move(callback).Run(std::nullopt);
++      return;
++    }
++    provider->scheduler().GetControlledFramePartition(
++        *url_info, partition_name, in_memory, std::move(callback));
++    return;
++  }
++
++  ExtensionsBrowserClient::GetWebViewStoragePartitionConfig(
++      browser_context, owner_site_instance, partition_name, in_memory,
++      std::move(callback));
+ }
+ 
+ void ChromeExtensionsBrowserClient::ReportError(
+diff --git a/chrome/browser/guest_view/chrome_guest_view_manager_delegate.cc b/chrome/browser/guest_view/chrome_guest_view_manager_delegate.cc
+index 4cf78bf..54497fa 100644
+--- a/chrome/browser/guest_view/chrome_guest_view_manager_delegate.cc
++++ b/chrome/browser/guest_view/chrome_guest_view_manager_delegate.cc
+@@ -74,7 +74,7 @@ void ChromeGuestViewManagerDelegate::OnGuestAdded(
+ // isolated and that it's only exposed in the expected schemes / feature modes.
+ bool ChromeGuestViewManagerDelegate::IsOwnedByControlledFrameEmbedder(
+     const guest_view::GuestViewBase* guest) {
+-#if BUILDFLAG(ENABLE_EXTENSIONS)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   return ExtensionsGuestViewManagerDelegate::
+       IsGuestAvailableToContextWithFeature(guest, "controlledFrameInternal");
+ #else
+diff --git a/chrome/browser/media/webrtc/BUILD.gn b/chrome/browser/media/webrtc/BUILD.gn
+index c62e2da..88ce605 100644
+--- a/chrome/browser/media/webrtc/BUILD.gn
++++ b/chrome/browser/media/webrtc/BUILD.gn
+@@ -198,6 +198,7 @@ source_set("webrtc") {
+   ]
+ 
+   if (enable_extensions_core) {
++    deps += [ "//chrome/browser/controlled_frame:media_access_handler" ]
+     sources += [
+       "desktop_capture_access_handler.cc",
+       "desktop_capture_access_handler.h",
+@@ -222,7 +223,6 @@ source_set("webrtc") {
+       "//extensions/buildflags",
+     ]
+     deps += [
+-      "//chrome/browser/controlled_frame:media_access_handler",
+       "//chrome/browser/ui/tabs:tab_strip",
+       "//chrome/browser/ui/web_applications",
+       "//extensions/browser",
+diff --git a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
+index 9757afe..14958bb 100644
+--- a/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
++++ b/chrome/browser/media/webrtc/media_capture_devices_dispatcher.cc
+@@ -54,12 +54,12 @@
+ #endif  // BUILDFLAG(IS_CHROMEOS)
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
++#include "chrome/browser/controlled_frame/controlled_frame_media_access_handler.h"
+ #include "chrome/browser/media/webrtc/desktop_capture_access_handler.h"
+ #include "chrome/browser/media/webrtc/tab_capture_access_handler.h"
+ #endif
+ 
+ #if BUILDFLAG(ENABLE_EXTENSIONS)
+-#include "chrome/browser/controlled_frame/controlled_frame_media_access_handler.h"
+ #include "chrome/browser/media/extension_media_access_handler.h"
+ #include "extensions/common/extension.h"
+ #endif  // BUILDFLAG(ENABLE_EXTENSIONS)
+@@ -104,7 +104,7 @@ MediaCaptureDevicesDispatcher::MediaCaptureDevicesDispatcher()
+   media_access_handlers_.push_back(std::make_unique<TabCaptureAccessHandler>());
+ #endif
+ 
+-#if BUILDFLAG(ENABLE_EXTENSIONS)
++#if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
+   media_access_handlers_.push_back(
+       std::make_unique<controlled_frame::ControlledFrameMediaAccessHandler>());
+ #endif
+diff --git a/chrome/browser/web_applications/isolated_web_apps/commands/get_controlled_frame_partition_command.cc b/chrome/browser/web_applications/isolated_web_apps/commands/get_controlled_frame_partition_command.cc
+index 72d139d..9e1718f 100644
+--- a/chrome/browser/web_applications/isolated_web_apps/commands/get_controlled_frame_partition_command.cc
++++ b/chrome/browser/web_applications/isolated_web_apps/commands/get_controlled_frame_partition_command.cc
+@@ -47,7 +47,10 @@ GetControlledFramePartitionWithLock(Profile* profile,
+   {
+     ScopedRegistryUpdate update = lock.sync_bridge().BeginUpdate();
+     WebApp* iwa = update->UpdateApp(url_info.app_id());
+-    CHECK(iwa && iwa->isolation_data().has_value());
++    // An uninstall can complete before this command acquires its app lock.
++    if (!iwa || !iwa->isolation_data().has_value()) {
++      return std::nullopt;
++    }
+ 
+     const IsolationData& isolation_data = *iwa->isolation_data();
+ 
+diff --git a/extensions/browser/guest_view/web_view/controlled_frame_embedder_url_fetcher.cc b/extensions/browser/guest_view/web_view/controlled_frame_embedder_url_fetcher.cc
+index 2230dac..cf033b4 100644
+--- a/extensions/browser/guest_view/web_view/controlled_frame_embedder_url_fetcher.cc
++++ b/extensions/browser/guest_view/web_view/controlled_frame_embedder_url_fetcher.cc
+@@ -21,6 +21,7 @@
+ #include "services/network/public/cpp/shared_url_loader_factory.h"
+ #include "services/network/public/cpp/simple_url_loader.h"
+ #include "services/network/public/mojom/url_response_head.mojom.h"
++#include "url/origin.h"
+ 
+ namespace extensions {
+ 
+@@ -45,6 +46,14 @@ void ControlledFrameEmbedderURLFetcher::Start() {
+     return;
+   }
+ 
++  // File-backed scripts and CSS may only read from their IWA embedder.
++  if (url_.scheme() != render_frame_host->GetLastCommittedOrigin().scheme() ||
++      !render_frame_host->GetLastCommittedOrigin().IsSameOriginWith(
++          url::Origin::Create(url_))) {
++    std::move(callback_).Run(false, std::string());
++    return;
++  }
++
+   // Get ExtensionBrowserClient instance
+   mojo::Remote<network::mojom::URLLoaderFactory> factory(
+       extensions::ExtensionsBrowserClient::Get()
+@@ -52,6 +61,10 @@ void ControlledFrameEmbedderURLFetcher::Start() {
+               render_frame_host->GetLastCommittedOrigin(),
+               render_frame_host->GetFrameTreeNodeId(),
+               render_frame_host->GetBrowserContext()));
++  if (!factory.is_bound()) {
++    std::move(callback_).Run(false, std::string());
++    return;
++  }
+ 
+   net::NetworkTrafficAnnotationTag traffic_annotation =
+       net::DefineNetworkTrafficAnnotation(
